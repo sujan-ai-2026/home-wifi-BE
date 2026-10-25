@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: homenet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homenet
+      POSTGRES_USER: homenet_user
+      POSTGRES_PASSWORD: homenet_secure_db_pass
+    volumes:
+      - homenet_pgdata:/var/lib/postgresql/data
+    ports:
+      # Expose only to 127.0.0.1 for local host inspection if necessary
+      - "127.0.0.1:5432:5432"
+    networks:
+      - homenet-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homenet_user -d homenet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homenet-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      API_PREFIX: api/v1
+      DATABASE_URL: postgresql://homenet_user:homenet_secure_db_pass@postgres:5432/homenet
+      FRONTEND_ORIGIN: http://localhost:3000
+      JWT_SECRET: replace_with_long_random_secret_in_production_32chars
+      SPEEDTEST_BIN: speedtest
+      SPEED_THRESHOLD_MBPS: 10
+      UPLOAD_THRESHOLD_MBPS: 10
+      SPEED_TEST_INTERVAL_MINUTES: 15
+      ROUTER_POLL_INTERVAL_SECONDS=60
+      ROUTER_ADAPTER: mock
+      ROUTER_BASE_URL: http://192.168.1.1
+      ROUTER_USERNAME: admin
+      ROUTER_PASSWORD: admin
+    ports:
+      - "3001:3001"
+    networks:
+      - homenet-internal
+
+volumes:
+  homenet_pgdata:
+    driver: local
+
+networks:
+  homenet-internal:
+    driver: bridge
