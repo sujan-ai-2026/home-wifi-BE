@@ -12,7 +12,7 @@ export declare class DashboardService {
     private readonly logger;
     constructor(speedTestsService: SpeedTestsService, collectorService: NetworkCollectorService, devicesService: DevicesService, alertsService: AlertsService, routerService: RouterService);
     getOverview(): Promise<{
-        internetHealthState: "offline" | "healthy" | "degraded";
+        internetHealthState: "healthy" | "degraded" | "offline";
         routerReachable: boolean;
         wanConnected: boolean;
         routerStatus: string;
@@ -48,7 +48,7 @@ export declare class DashboardService {
             transmittedBytes: number | null;
         } | null;
         generatedAt: string;
-        status: "offline" | "healthy" | "degraded";
+        status: "healthy" | "degraded" | "offline";
         downloadMbps: number | null;
         uploadMbps: number | null;
         latencyMs: number | null;

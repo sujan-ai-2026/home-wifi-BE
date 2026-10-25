@@ -3,7 +3,7 @@ export declare class DashboardController {
     private readonly dashboardService;
     constructor(dashboardService: DashboardService);
     getOverview(): Promise<{
-        internetHealthState: "offline" | "healthy" | "degraded";
+        internetHealthState: "healthy" | "degraded" | "offline";
         routerReachable: boolean;
         wanConnected: boolean;
         routerStatus: string;
@@ -39,7 +39,7 @@ export declare class DashboardController {
             transmittedBytes: number | null;
         } | null;
         generatedAt: string;
-        status: "offline" | "healthy" | "degraded";
+        status: "healthy" | "degraded" | "offline";
         downloadMbps: number | null;
         uploadMbps: number | null;
         latencyMs: number | null;

@@ -22,21 +22,37 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   // Helmet security headers
-  // Strict CORS allowlist - mounted first so all requests and preflights receive CORS headers
+  // CORS configuration - mounted first so all requests and preflights receive CORS headers
   const allowedOrigins = [
     frontendOrigin,
     'http://localhost:3000',
-    'http://127.0.0.1:3000',
+    'http://localhost:3001',
+    'http://localhost:3002',
     'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:3002',
+    'http://127.0.0.1:5173',
+    'https://rad-cucurucho-a9ef22.netlify.app',
   ];
 
   app.enableCors({
     origin: (origin, callback) => {
+      const normalizedOrigin = origin?.replace(/\/+$/, '');
       if (
         !origin ||
+        nodeEnv !== 'production' ||
         allowedOrigins.includes(origin) ||
+        (normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) ||
         origin.startsWith('http://localhost:') ||
-        origin.startsWith('http://127.0.0.1:')
+        origin.startsWith('http://127.0.0.1:') ||
+        origin.endsWith('.ngrok-free.app') ||
+        origin.endsWith('.ngrok.app') ||
+        origin.endsWith('.ngrok.io') ||
+        origin.endsWith('.ngrok-free.dev') ||
+        origin.endsWith('.netlify.app') ||
+        (normalizedOrigin && normalizedOrigin.endsWith('.netlify.app')) ||
+        /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
       ) {
         callback(null, true);
       } else {
@@ -45,16 +61,7 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      'x-correlation-id',
-      'Accept',
-      'Origin',
-      'X-Requested-With',
-      'Range',
-      'Cache-Control',
-    ],
+    exposedHeaders: ['Content-Disposition', 'Content-Length', 'x-correlation-id'],
   });
 
   // Helmet security headers

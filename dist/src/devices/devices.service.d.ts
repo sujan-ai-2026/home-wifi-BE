@@ -25,6 +25,8 @@ export declare class DevicesService {
             gatewayIp: string;
             gatewayUrl: string;
             id: string;
+            createdAt: Date;
+            updatedAt: Date;
             macAddress: string | null;
             hostname: string | null;
             ipAddress: string | null;
@@ -34,8 +36,6 @@ export declare class DevicesService {
             lastSeenAt: Date;
             isOnline: boolean;
             source: string;
-            createdAt: Date;
-            updatedAt: Date;
         }[];
         meta: {
             page: number;
@@ -92,6 +92,8 @@ export declare class DevicesService {
         totalConnectedMs: number;
         observationCount: number;
         id: string;
+        createdAt: Date;
+        updatedAt: Date;
         macAddress: string | null;
         hostname: string | null;
         ipAddress: string | null;
@@ -101,8 +103,6 @@ export declare class DevicesService {
         lastSeenAt: Date;
         isOnline: boolean;
         source: string;
-        createdAt: Date;
-        updatedAt: Date;
     }>;
     private buildConnectionSessions;
     getDeviceHistory(id: string, pagination: PaginationQueryDto): Promise<{
