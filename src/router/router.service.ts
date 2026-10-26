@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { desc } from 'drizzle-orm';
+import { and, desc, notInArray, notLike } from 'drizzle-orm';
 import { DRIZZLE_ORM, DrizzleDb } from '../database/database.provider';
 import { routerSnapshots } from '../database/schema';
 import { RouterAdapterRegistry } from './adapters/router-adapter.registry';
@@ -18,6 +18,15 @@ export class RouterService {
     const adapter = this.registry.getActiveAdapter();
     const status = await adapter.getStatus();
     const counters = await adapter.getInterfaceCounters();
+
+    if (
+      status.source.toLowerCase().startsWith('mock') ||
+      status.source === 'airtel_gateway' ||
+      counters?.source.toLowerCase().startsWith('mock')
+    ) {
+      this.logger.warn('Skipping persistence of mock router snapshot data');
+      return status;
+    }
 
     try {
       await this.db.insert(routerSnapshots).values({
@@ -40,6 +49,12 @@ export class RouterService {
     const [latest] = await this.db
       .select()
       .from(routerSnapshots)
+      .where(
+        and(
+          notLike(routerSnapshots.source, 'mock%'),
+          notInArray(routerSnapshots.source, ['airtel_gateway', 'airtel_counters']),
+        ),
+      )
       .orderBy(desc(routerSnapshots.observedAt))
       .limit(1);
 

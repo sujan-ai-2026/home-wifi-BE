@@ -15,15 +15,18 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const mock_adapter_1 = require("./mock.adapter");
 const airtel_adapter_1 = require("./airtel.adapter");
+const unsupported_adapter_1 = require("./unsupported.adapter");
 let RouterAdapterRegistry = RouterAdapterRegistry_1 = class RouterAdapterRegistry {
-    constructor(configService, mockAdapter, airtelAdapter) {
+    constructor(configService, mockAdapter, airtelAdapter, unsupportedAdapter) {
         this.configService = configService;
         this.mockAdapter = mockAdapter;
         this.airtelAdapter = airtelAdapter;
+        this.unsupportedAdapter = unsupportedAdapter;
         this.logger = new common_1.Logger(RouterAdapterRegistry_1.name);
         this.adapters = new Map();
         this.register(this.mockAdapter);
         this.register(this.airtelAdapter);
+        this.register(this.unsupportedAdapter);
     }
     register(adapter) {
         this.adapters.set(adapter.name.toLowerCase(), adapter);
@@ -32,8 +35,8 @@ let RouterAdapterRegistry = RouterAdapterRegistry_1 = class RouterAdapterRegistr
         const configuredName = (this.configService.get('app.routerAdapter') || 'mock').toLowerCase();
         const adapter = this.adapters.get(configuredName);
         if (!adapter) {
-            this.logger.warn(`Configured router adapter '${configuredName}' not found. Falling back to 'mock'.`);
-            return this.mockAdapter;
+            this.logger.error(`Configured router adapter '${configuredName}' not found. No router telemetry will be collected.`);
+            return this.unsupportedAdapter;
         }
         return adapter;
     }
@@ -43,6 +46,7 @@ exports.RouterAdapterRegistry = RouterAdapterRegistry = RouterAdapterRegistry_1 
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [config_1.ConfigService,
         mock_adapter_1.MockRouterAdapter,
-        airtel_adapter_1.AirtelRouterAdapter])
+        airtel_adapter_1.AirtelRouterAdapter,
+        unsupported_adapter_1.UnsupportedRouterAdapter])
 ], RouterAdapterRegistry);
 //# sourceMappingURL=router-adapter.registry.js.map

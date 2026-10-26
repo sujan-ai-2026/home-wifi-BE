@@ -4,12 +4,35 @@ import { DevicesService } from './devices.service';
 import { DevicesQueryDto } from './dto/devices-query.dto';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { Public } from '../common/decorators/public.decorator';
+import { RouterService } from '../router/router.service';
 
 
 @ApiTags('devices')
 @Controller('devices')
 export class DevicesController {
-  constructor(private readonly devicesService: DevicesService) {}
+  constructor(
+    private readonly devicesService: DevicesService,
+    private readonly routerService: RouterService,
+  ) {}
+
+  @Public()
+  @Get('live')
+  @ApiOperation({ summary: 'Get current devices from the active router adapter' })
+  @ApiResponse({ status: 200, description: 'Live router-discovered devices' })
+  async getLiveDevices() {
+    const devices = (await this.routerService.getConnectedDevices()).filter(
+      (device) =>
+        !device.source.toLowerCase().startsWith('mock') &&
+        device.source.toLowerCase() !== 'airtel_gateway',
+    );
+    return {
+      items: devices,
+      meta: {
+        totalConnected: devices.filter((device) => device.isOnline).length,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
 
   @Public()
   @Get()

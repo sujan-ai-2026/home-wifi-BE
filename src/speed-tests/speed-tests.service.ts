@@ -4,7 +4,7 @@ import {
   Logger,
   ConflictException,
 } from '@nestjs/common';
-import { desc, eq, and, gte, lte, count } from 'drizzle-orm';
+import { desc, eq, and, gte, lte, count, notLike } from 'drizzle-orm';
 import { DRIZZLE_ORM, DrizzleDb } from '../database/database.provider';
 import { speedTests } from '../database/schema';
 import { CliSpeedTestProvider } from './providers/cli-speed-test.provider';
@@ -38,6 +38,20 @@ export class SpeedTestsService {
     this.isRunning = true;
     try {
       const result = await this.cliProvider.execute();
+
+      if (result.provider.toLowerCase().startsWith('simulation')) {
+        this.logger.warn('Skipping persistence of simulated speed-test data');
+        return {
+          ...result,
+          status: 'failed',
+          downloadMbps: null,
+          uploadMbps: null,
+          latencyMs: null,
+          jitterMs: null,
+          errorCode: 'SIMULATION_NOT_PERSISTED',
+          errorMessage: 'Simulated speed-test data is not stored.',
+        };
+      }
 
       // Persist outcome to database
       const [record] = await this.db
@@ -93,13 +107,19 @@ export class SpeedTestsService {
     const [latestAttempt] = await this.db
       .select()
       .from(speedTests)
+      .where(notLike(speedTests.provider, 'simulation%'))
       .orderBy(desc(speedTests.measuredAt))
       .limit(1);
 
     const [latestSuccess] = await this.db
       .select()
       .from(speedTests)
-      .where(eq(speedTests.status, 'success'))
+      .where(
+        and(
+          eq(speedTests.status, 'success'),
+          notLike(speedTests.provider, 'simulation%'),
+        ),
+      )
       .orderBy(desc(speedTests.measuredAt))
       .limit(1);
 
@@ -148,7 +168,7 @@ export class SpeedTestsService {
    * Paginated speed-test measurement history
    */
   async getHistory(query: SpeedTestHistoryQueryDto) {
-    const conditions: any[] = [];
+    const conditions: any[] = [notLike(speedTests.provider, 'simulation%')];
 
     if (query.status) {
       conditions.push(eq(speedTests.status, query.status));

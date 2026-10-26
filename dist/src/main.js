@@ -7,6 +7,7 @@ const config_1 = require("@nestjs/config");
 const helmet_1 = require("helmet");
 const express_rate_limit_1 = require("express-rate-limit");
 const app_module_1 = require("./app.module");
+const cors_1 = require("./config/cors");
 async function bootstrap() {
     const logger = new common_1.Logger('HomeNetBootstrap');
     const app = await core_1.NestFactory.create(app_module_1.AppModule, {
@@ -18,39 +19,10 @@ async function bootstrap() {
     const frontendOrigin = configService.get('app.frontendOrigin') || 'http://localhost:3000';
     const nodeEnv = configService.get('app.nodeEnv') || 'development';
     app.enableShutdownHooks();
-    const allowedOrigins = [
-        frontendOrigin,
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:3002',
-        'http://localhost:5173',
-        'http://127.0.0.1:3000',
-        'http://127.0.0.1:3001',
-        'http://127.0.0.1:3002',
-        'http://127.0.0.1:5173',
-        'https://rad-cucurucho-a9ef22.netlify.app',
-    ];
+    const allowedOrigins = (0, cors_1.getAllowedOrigins)(frontendOrigin);
     app.enableCors({
         origin: (origin, callback) => {
-            const normalizedOrigin = origin?.replace(/\/+$/, '');
-            if (!origin ||
-                nodeEnv !== 'production' ||
-                allowedOrigins.includes(origin) ||
-                (normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) ||
-                origin.startsWith('http://localhost:') ||
-                origin.startsWith('http://127.0.0.1:') ||
-                origin.endsWith('.ngrok-free.app') ||
-                origin.endsWith('.ngrok.app') ||
-                origin.endsWith('.ngrok.io') ||
-                origin.endsWith('.ngrok-free.dev') ||
-                origin.endsWith('.netlify.app') ||
-                (normalizedOrigin && normalizedOrigin.endsWith('.netlify.app')) ||
-                /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)) {
-                callback(null, true);
-            }
-            else {
-                callback(null, false);
-            }
+            callback(null, (0, cors_1.isCorsOriginAllowed)(origin, allowedOrigins, nodeEnv));
         },
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

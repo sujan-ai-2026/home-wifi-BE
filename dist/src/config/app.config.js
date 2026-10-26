@@ -13,7 +13,8 @@ exports.default = (0, config_1.registerAs)('app', () => ({
     uploadThresholdMbps: parseFloat(process.env.UPLOAD_THRESHOLD_MBPS || '10'),
     speedTestIntervalMinutes: parseInt(process.env.SPEED_TEST_INTERVAL_MINUTES || '15', 10),
     routerPollIntervalSeconds: parseInt(process.env.ROUTER_POLL_INTERVAL_SECONDS || '60', 10),
-    routerAdapter: process.env.ROUTER_ADAPTER || 'mock',
+    routerAdapter: process.env.ROUTER_ADAPTER ||
+        (process.env.NODE_ENV === 'production' ? 'unsupported' : 'mock'),
     routerBaseUrl: process.env.ROUTER_BASE_URL || 'http://192.168.1.1',
     routerUsername: process.env.ROUTER_USERNAME || 'admin',
     routerPassword: process.env.ROUTER_PASSWORD || 'admin',

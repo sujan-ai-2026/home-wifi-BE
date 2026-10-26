@@ -42,11 +42,11 @@ let ReportsService = ReportsService_1 = class ReportsService {
         const successfulTests = await this.db
             .select()
             .from(schema_1.speedTests)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'success')));
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'success'), (0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%')));
         const failedTests = await this.db
             .select()
             .from(schema_1.speedTests)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'failed')));
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'failed'), (0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%')));
         const totalSuccessful = successfulTests.length;
         const totalFailed = failedTests.length;
         const totalTests = totalSuccessful + totalFailed;
@@ -81,7 +81,7 @@ let ReportsService = ReportsService_1 = class ReportsService {
         const snapshots = await this.db
             .select()
             .from(schema_1.routerSnapshots)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.routerSnapshots.observedAt, start), (0, drizzle_orm_1.lt)(schema_1.routerSnapshots.observedAt, end)));
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.routerSnapshots.observedAt, start), (0, drizzle_orm_1.lt)(schema_1.routerSnapshots.observedAt, end), (0, drizzle_orm_1.notLike)(schema_1.routerSnapshots.source, 'mock%'), (0, drizzle_orm_1.notInArray)(schema_1.routerSnapshots.source, ['airtel_gateway', 'airtel_counters'])));
         let estimatedUptimePercentage = null;
         let outageDurationSeconds = 0;
         if (snapshots.length > 0) {
@@ -150,7 +150,7 @@ let ReportsService = ReportsService_1 = class ReportsService {
         const tests = await this.db
             .select()
             .from(schema_1.speedTests)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'success')));
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'success'), (0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%')));
         const downloads = tests
             .map((t) => (t.downloadMbps ? parseFloat(t.downloadMbps) : null))
             .filter((v) => v !== null);
@@ -192,7 +192,7 @@ let ReportsService = ReportsService_1 = class ReportsService {
         const tests = await this.db
             .select()
             .from(schema_1.speedTests)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end)));
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.gte)(schema_1.speedTests.measuredAt, start), (0, drizzle_orm_1.lt)(schema_1.speedTests.measuredAt, end), (0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%')));
         const headers = [
             'Timestamp (UTC)',
             'Status',

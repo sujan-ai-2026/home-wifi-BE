@@ -11,72 +11,146 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var AirtelRouterAdapter_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AirtelRouterAdapter = void 0;
+exports.parseLinuxArpTable = parseLinuxArpTable;
+exports.parseLinuxNeighborStates = parseLinuxNeighborStates;
+exports.getLocalHostDevice = getLocalHostDevice;
 const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const https = require("https");
 const http = require("http");
+const os = require("os");
 const child_process_1 = require("child_process");
+const promises_1 = require("fs/promises");
 const util_1 = require("util");
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
+function parseLinuxArpTable(contents, routerSubnet, routerHost) {
+    return contents
+        .split('\n')
+        .slice(1)
+        .flatMap((line) => {
+        const [ip, , flags, mac] = line.trim().split(/\s+/);
+        if (!ip ||
+            !flags ||
+            !mac ||
+            (parseInt(flags, 16) & 0x2) === 0 ||
+            !ip.startsWith(`${routerSubnet}.`) ||
+            ip.endsWith('.255') ||
+            ip === routerHost) {
+            return [];
+        }
+        const octets = mac.split(':');
+        if (octets.length !== 6 || octets.some((octet) => !/^[0-9a-f]{1,2}$/i.test(octet))) {
+            return [];
+        }
+        return [
+            {
+                ip,
+                macClean: octets
+                    .map((octet) => octet.padStart(2, '0').toUpperCase())
+                    .join(':'),
+                hostPart: '?',
+            },
+        ];
+    });
+}
+function parseLinuxNeighborStates(contents, routerSubnet, routerHost) {
+    const states = new Map();
+    for (const line of contents.split('\n')) {
+        const match = line.match(/^((?:\d{1,3}\.){3}\d{1,3})\s+.*\s(REACHABLE|STALE|DELAY|PROBE|FAILED|INCOMPLETE|PERMANENT|NOARP)$/i);
+        if (!match)
+            continue;
+        const [, ip, state] = match;
+        if (ip.startsWith(`${routerSubnet}.`) && ip !== routerHost) {
+            states.set(ip, state.toUpperCase());
+        }
+    }
+    return states;
+}
+function getLocalHostDevice(routerSubnet, hostName, interfaces) {
+    for (const [interfaceName, addresses] of Object.entries(interfaces)) {
+        const address = addresses?.find((candidate) => !candidate.internal &&
+            (candidate.family === 'IPv4' || candidate.family === 4) &&
+            candidate.address.startsWith(`${routerSubnet}.`));
+        if (!address)
+            continue;
+        return {
+            macAddress: address.mac && address.mac !== '00:00:00:00:00:00'
+                ? address.mac.toUpperCase()
+                : null,
+            ipAddress: address.address,
+            hostname: hostName || interfaceName,
+            deviceType: 'unknown',
+            connectionType: 'unknown',
+            isOnline: true,
+            source: 'local_host',
+        };
+    }
+    return null;
+}
 let AirtelRouterAdapter = AirtelRouterAdapter_1 = class AirtelRouterAdapter {
     constructor(configService) {
         this.configService = configService;
         this.name = 'airtel';
         this.logger = new common_1.Logger(AirtelRouterAdapter_1.name);
-        this.uptimeAnchorSeconds = 432000;
-        this.startTimestamp = Date.now();
         this.lastSubnetSweep = 0;
     }
-    async discoverWifiAdvertisedNames() {
+    async resolveMdnsHostnames(ips) {
         const results = new Map();
-        try {
-            const services = ['_googlecast._tcp', '_companion-link._tcp', '_androidtvremote2._tcp', '_airplay._tcp'];
-            const cmd = services.map((s) => `dns-sd -B ${s} local. & p=$!; PIDS="$PIDS $p";`).join(' ') +
-                ' sleep 1.0; kill $PIDS 2>/dev/null';
-            const { stdout } = await execFileAsync('sh', ['-c', cmd], { timeout: 2500 });
-            const lines = stdout.split('\n');
-            for (const line of lines) {
-                const m = line.match(/Add\s+\d+\s+\d+\s+local\.\s+([^\s]+)\s+(.+)/);
-                if (!m)
-                    continue;
-                const svc = m[1].toLowerCase();
-                let instance = m[2].trim();
-                let type = 'mobile';
-                if (svc.includes('googlecast') || svc.includes('androidtv')) {
-                    type = 'tv';
-                    if (instance.includes('XStream-Smart-Box') || instance.includes('xstream')) {
-                        instance = 'Airtel XStream Smart Box';
-                    }
-                }
-                else if (svc.includes('companion-link')) {
-                    type = instance.toLowerCase().includes('macbook') || instance.toLowerCase().includes('mac') ? 'laptop' : 'mobile';
-                }
-                else if (svc.includes('airplay')) {
-                    type = 'tv';
-                }
-                if (type === 'tv') {
-                    results.set('tv', { name: instance, type });
+        if (process.platform !== 'linux')
+            return results;
+        await Promise.all([...new Set(ips)].map(async (ip) => {
+            try {
+                const { stdout } = await execFileAsync('gdbus', [
+                    'call',
+                    '--system',
+                    '--dest',
+                    'org.freedesktop.Avahi',
+                    '--object-path',
+                    '/',
+                    '--method',
+                    'org.freedesktop.Avahi.Server.ResolveAddress',
+                    'int32 -1',
+                    'int32 -1',
+                    `'${ip}'`,
+                    'uint32 0',
+                ], { timeout: 1500 });
+                const match = stdout.match(/,\s'((?:[^'\\]|\\.)*)',\s*uint32 \d+\)/);
+                const hostname = match?.[1]
+                    .replace(/\\([0-7]{3})/g, (_escape, octal) => String.fromCharCode(parseInt(octal, 8)))
+                    .replace(/\.local\.?$/i, '');
+                if (hostname &&
+                    !hostname.toLowerCase().startsWith('unknown_') &&
+                    hostname !== ip) {
+                    results.set(ip, hostname);
                 }
             }
-        }
-        catch {
-        }
+            catch {
+            }
+        }));
         return results;
     }
+    async refreshArpCache(candidateIps) {
+        const batchSize = 32;
+        for (let i = 0; i < candidateIps.length; i += batchSize) {
+            await Promise.allSettled(candidateIps.slice(i, i + batchSize).map((ip) => execFileAsync('ping', ['-c', '1', '-W', '200', ip], {
+                timeout: 400,
+            })));
+        }
+    }
     resolveDynamicDeviceDetails(ip, macClean, exposedHost, wifiNames) {
-        const lastOctet = ip.split('.').pop() || '0';
-        const cleanMacNoSep = macClean.replace(/[^A-F0-9]/g, '');
         if (exposedHost &&
             exposedHost !== '?' &&
             !exposedHost.toLowerCase().startsWith('unknown_')) {
             const lower = exposedHost.toLowerCase();
-            let deviceType = 'mobile';
-            if (lower.includes('tv') || lower.includes('box') || lower.includes('stream'))
-                deviceType = 'tv';
-            else if (lower.includes('mac') || lower.includes('pc') || lower.includes('laptop'))
-                deviceType = 'laptop';
-            else if (lower.includes('pad') || lower.includes('tab'))
+            let deviceType = 'unknown';
+            if (lower.includes('ipad') || lower.includes('tablet') || lower.includes('tab'))
                 deviceType = 'tablet';
+            else if (lower.includes('tv') || lower.includes('box') || lower.includes('stream'))
+                deviceType = 'tv';
+            else if (lower.includes('macbook') || lower.includes('mac ') || lower.endsWith(' mac') || lower.includes('laptop') || lower.includes('notebook'))
+                deviceType = 'laptop';
+            else if (lower.includes('iphone') || lower.includes('android') || lower.includes('phone') || lower.includes('pixel') || lower.includes('galaxy') || lower.includes('oppo') || lower.includes('vivo') || lower.includes('redmi') || lower.includes('xiaomi') || lower.includes('oneplus'))
+                deviceType = 'mobile';
             else if (lower.includes('sensor') || lower.includes('plug') || lower.includes('iot'))
                 deviceType = 'iot';
             return {
@@ -84,33 +158,13 @@ let AirtelRouterAdapter = AirtelRouterAdapter_1 = class AirtelRouterAdapter {
                 deviceType,
             };
         }
-        if (wifiNames) {
-            if (ip === '192.168.1.9' && wifiNames.has('tv')) {
-                const tvInfo = wifiNames.get('tv');
-                return {
-                    deviceName: `${tvInfo.name} (${ip})`,
-                    deviceType: tvInfo.type,
-                };
-            }
-            if (wifiNames.has(ip)) {
-                const info = wifiNames.get(ip);
-                return {
-                    deviceName: `${info.name} (${ip})`,
-                    deviceType: info.type,
-                };
-            }
-        }
-        const secondNibble = parseInt(cleanMacNoSep.charAt(1), 16);
-        const isPrivateMac = [2, 6, 10, 14].includes(secondNibble);
-        if (isPrivateMac) {
-            return {
-                deviceName: `Smartphone (${ip})`,
-                deviceType: 'mobile',
-            };
+        const mdnsHostname = wifiNames?.get(ip);
+        if (mdnsHostname) {
+            return this.resolveDynamicDeviceDetails(ip, macClean, mdnsHostname);
         }
         return {
             deviceName: `Device (${ip})`,
-            deviceType: 'mobile',
+            deviceType: 'unknown',
         };
     }
     isAllowedTargetUrl(rawUrl) {
@@ -168,13 +222,12 @@ let AirtelRouterAdapter = AirtelRouterAdapter_1 = class AirtelRouterAdapter {
             const probe = await this.probeRouterEndpoint(rawUrl, 3000);
             const isReachable = probe.statusCode !== undefined && probe.statusCode >= 200 && probe.statusCode < 500;
             if (isReachable) {
-                const elapsed = Math.floor((Date.now() - this.startTimestamp) / 1000);
                 return {
-                    wanConnected: true,
-                    routerUptimeSeconds: this.uptimeAnchorSeconds + elapsed,
+                    wanConnected: null,
+                    routerUptimeSeconds: null,
                     status: 'ok',
-                    modelInfo: 'Airtel Dual Band Wi-Fi 6 AP (Model: AAP4221ZY, MAC: 44:63:C2:3B:7A:C0)',
-                    source: 'airtel_gateway',
+                    modelInfo: 'Configured router responded to an HTTP probe',
+                    source: 'airtel_probe',
                 };
             }
             return {
@@ -197,93 +250,72 @@ let AirtelRouterAdapter = AirtelRouterAdapter_1 = class AirtelRouterAdapter {
         }
     }
     async getConnectedDevices() {
-        const discoveredDevices = [
-            {
-                macAddress: '44:63:C2:3B:7A:C0',
-                ipAddress: '192.168.1.1',
-                hostname: 'Airtel Wi-Fi 6 Router (AAP4221ZY)',
-                deviceType: 'router',
-                connectionType: 'ethernet',
-                isOnline: true,
-                source: 'airtel_gateway',
-            },
-        ];
+        const discoveredDevices = [];
         try {
-            let hostName = 'Host Computer';
-            try {
-                const { stdout: nameOut } = await execFileAsync('scutil', ['--get', 'ComputerName'], { timeout: 1000 });
-                if (nameOut.trim())
-                    hostName = nameOut.trim();
+            const routerHost = new URL(this.configService.get('app.routerBaseUrl') ||
+                'http://192.168.1.1').hostname;
+            const routerSubnet = routerHost.split('.').slice(0, 3).join('.');
+            const localHost = getLocalHostDevice(routerSubnet, os.hostname(), os.networkInterfaces());
+            if (localHost) {
+                discoveredDevices.push(localHost);
             }
-            catch {
-            }
-            discoveredDevices.push({
-                macAddress: 'CA:55:C2:36:01:AD',
-                ipAddress: '192.168.1.6',
-                hostname: hostName,
-                deviceType: 'laptop',
-                connectionType: 'wifi',
-                isOnline: true,
-                source: 'local_host',
-            });
-        }
-        catch (err) {
-            this.logger.debug(`Could not resolve local host device: ${err.message}`);
-        }
-        try {
             const nowTs = Date.now();
             if (nowTs - this.lastSubnetSweep > 60000) {
                 this.lastSubnetSweep = nowTs;
-                const candidateIps = [
-                    ...Array.from({ length: 30 }, (_, i) => `192.168.1.${i + 2}`),
-                    ...Array.from({ length: 20 }, (_, i) => `192.168.1.${i + 100}`),
-                ];
-                Promise.allSettled(candidateIps.map((ip) => execFileAsync('ping', ['-c', '1', '-W', '200', ip], { timeout: 400 }).catch(() => { }))).catch(() => { });
+                const candidateIps = Array.from({ length: 253 }, (_, i) => i + 2)
+                    .filter((lastOctet) => `${routerSubnet}.${lastOctet}` !== routerHost)
+                    .map((lastOctet) => `${routerSubnet}.${lastOctet}`);
+                await this.refreshArpCache(candidateIps).catch((err) => {
+                    this.logger.warn(`Could not refresh local ARP cache: ${err.message}`);
+                });
             }
-            const wifiNames = await this.discoverWifiAdvertisedNames().catch(() => new Map());
-            const { stdout } = await execFileAsync('arp', ['-a'], { timeout: 3000 });
-            const lines = stdout.split('\n');
             const arpCandidates = [];
-            for (const line of lines) {
-                const ipMatch = line.match(/\((192\.168\.\d+\.\d+)\)/);
-                if (!ipMatch)
-                    continue;
-                const ip = ipMatch[1];
-                if (ip.endsWith('.255') || ip === '192.168.1.1' || ip === '192.168.1.6') {
-                    continue;
-                }
-                const isIncomplete = line.includes('(incomplete)');
-                const macMatch = line.match(/at\s+([0-9a-fA-F:]+)/);
-                const rawMac = macMatch ? macMatch[1] : null;
-                if (isIncomplete || !rawMac || rawMac.toLowerCase().includes('ff:ff:ff')) {
-                    continue;
-                }
-                const macClean = rawMac
-                    .split(':')
-                    .map((b) => b.padStart(2, '0').toUpperCase())
-                    .join(':');
-                const hostPart = line.split('(')[0]?.trim();
-                arpCandidates.push({ ip, macClean, hostPart });
+            if (process.platform === 'linux') {
+                const [arpContents, neighborOutput] = await Promise.all([
+                    (0, promises_1.readFile)('/proc/net/arp', 'utf8'),
+                    execFileAsync('ip', ['neigh', 'show'], { timeout: 3000 }).then(({ stdout }) => stdout, (err) => {
+                        this.logger.warn(`Could not read Linux neighbor states: ${err.message}`);
+                        return '';
+                    }),
+                ]);
+                const neighborStates = parseLinuxNeighborStates(neighborOutput, routerSubnet, routerHost);
+                arpCandidates.push(...parseLinuxArpTable(arpContents, routerSubnet, routerHost).filter(({ ip }) => neighborStates.get(ip) !== 'FAILED' &&
+                    neighborStates.get(ip) !== 'INCOMPLETE'));
             }
-            const livenessResults = await Promise.all(arpCandidates.map(async ({ ip }) => {
-                try {
-                    await execFileAsync('ping', ['-c', '2', '-W', '800', '-t', '2', ip], { timeout: 2500 });
-                    return { ip, isOnline: true };
+            else {
+                const lines = (await execFileAsync('arp', ['-a'], { timeout: 3000 })).stdout.split('\n');
+                for (const line of lines) {
+                    const ipMatch = line.match(/\(((?:\d{1,3}\.){3}\d{1,3})\)/);
+                    const macMatch = line.match(/at\s+([0-9a-fA-F:]+)/);
+                    if (!ipMatch || !macMatch || line.includes('(incomplete)'))
+                        continue;
+                    const ip = ipMatch[1];
+                    const octets = macMatch[1].split(':');
+                    if (!ip.startsWith(`${routerSubnet}.`) ||
+                        ip.endsWith('.255') ||
+                        ip === routerHost ||
+                        octets.length !== 6) {
+                        continue;
+                    }
+                    arpCandidates.push({
+                        ip,
+                        macClean: octets
+                            .map((octet) => octet.padStart(2, '0').toUpperCase())
+                            .join(':'),
+                        hostPart: line.split('(')[0]?.trim() || '?',
+                    });
                 }
-                catch {
-                    return { ip, isOnline: false };
-                }
-            }));
-            const livenessMap = new Map(livenessResults.map((r) => [r.ip, r.isOnline]));
+            }
+            const wifiNames = await this.resolveMdnsHostnames(arpCandidates.map(({ ip }) => ip));
             for (const { ip, macClean, hostPart } of arpCandidates) {
-                const isOnline = livenessMap.get(ip) ?? false;
+                const isOnline = true;
                 const { deviceName, deviceType } = this.resolveDynamicDeviceDetails(ip, macClean, hostPart, wifiNames);
                 discoveredDevices.push({
                     macAddress: macClean,
                     ipAddress: ip,
                     hostname: deviceName,
                     deviceType,
-                    connectionType: 'wifi',
+                    connectionType: 'unknown',
                     isOnline,
                     source: 'airtel_arp',
                 });
@@ -295,14 +327,7 @@ let AirtelRouterAdapter = AirtelRouterAdapter_1 = class AirtelRouterAdapter {
         return discoveredDevices;
     }
     async getInterfaceCounters() {
-        const elapsed = Math.floor((Date.now() - this.startTimestamp) / 1000);
-        const received = 114800000000 + elapsed * 180000;
-        const transmitted = 29280000000 + elapsed * 50000;
-        return {
-            receivedBytes: received,
-            transmittedBytes: transmitted,
-            source: 'airtel_counters',
-        };
+        return null;
     }
 };
 exports.AirtelRouterAdapter = AirtelRouterAdapter;

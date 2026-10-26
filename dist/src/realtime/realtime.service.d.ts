@@ -1,4 +1,5 @@
 import { RealtimeGateway } from './realtime.gateway';
+import { RouterDevice } from '../router/adapters/router.adapter.interface';
 export interface SpeedTestUpdatedPayload {
     id: string;
     downloadMbps: number | null;
@@ -19,6 +20,7 @@ export interface InternetHealthUpdatedPayload {
 export interface DevicesUpdatedPayload {
     totalConnected: number;
     updatedAt: string;
+    devices?: RouterDevice[];
 }
 export interface AlertEventPayload {
     id: string;
@@ -49,7 +51,7 @@ export declare class RealtimeService {
     emitSpeedTest(payload: SpeedTestUpdatedPayload): void;
     emitInternetHealth(payload: InternetHealthUpdatedPayload): void;
     emitDevices(payload: DevicesUpdatedPayload): void;
-    emitDevicesListUpdated(): void;
+    emitDevicesListUpdated(devices?: RouterDevice[]): void;
     emitAlertCreated(payload: AlertEventPayload): void;
     emitAlertResolved(payload: AlertEventPayload): void;
     emitDeviceStatusChanged(payload: DeviceAlertPayload): void;

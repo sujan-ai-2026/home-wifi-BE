@@ -29,6 +29,12 @@ let RouterService = RouterService_1 = class RouterService {
         const adapter = this.registry.getActiveAdapter();
         const status = await adapter.getStatus();
         const counters = await adapter.getInterfaceCounters();
+        if (status.source.toLowerCase().startsWith('mock') ||
+            status.source === 'airtel_gateway' ||
+            counters?.source.toLowerCase().startsWith('mock')) {
+            this.logger.warn('Skipping persistence of mock router snapshot data');
+            return status;
+        }
         try {
             await this.db.insert(schema_1.routerSnapshots).values({
                 wanConnected: status.wanConnected,
@@ -49,6 +55,7 @@ let RouterService = RouterService_1 = class RouterService {
         const [latest] = await this.db
             .select()
             .from(schema_1.routerSnapshots)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.notLike)(schema_1.routerSnapshots.source, 'mock%'), (0, drizzle_orm_1.notInArray)(schema_1.routerSnapshots.source, ['airtel_gateway', 'airtel_counters'])))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.routerSnapshots.observedAt))
             .limit(1);
         return latest || null;

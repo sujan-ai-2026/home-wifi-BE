@@ -1,0 +1,20 @@
+services:
+  api:
+    profiles:
+      - container-api
+
+  api-tunnel-proxy:
+    image: node:20-alpine
+    container_name: homenet-api-tunnel-proxy
+    restart: unless-stopped
+    command:
+      - node
+      - -e
+      - "const net=require('node:net');net.createServer(client=>{const upstream=net.connect(3001,'host.docker.internal');client.pipe(upstream);upstream.pipe(client);client.on('error',()=>upstream.destroy());upstream.on('error',()=>client.destroy())}).listen(3001,'0.0.0.0')"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: !reset []
+    networks:
+      homenet-internal:
+        aliases:
+          - api

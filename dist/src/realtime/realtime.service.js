@@ -30,9 +30,12 @@ let RealtimeService = RealtimeService_1 = class RealtimeService {
         this.logger.debug(`Emitting devices.updated: ${payload.totalConnected} devices`);
         this.gateway.broadcast('devices.updated', payload);
     }
-    emitDevicesListUpdated() {
+    emitDevicesListUpdated(devices) {
         this.logger.debug(`Emitting devices.list.updated`);
-        this.gateway.broadcast('devices.list.updated', { updatedAt: new Date().toISOString() });
+        this.gateway.broadcast('devices.list.updated', {
+            updatedAt: new Date().toISOString(),
+            ...(devices ? { devices } : {}),
+        });
     }
     emitAlertCreated(payload) {
         this.logger.log(`Emitting alert.created for ${payload.metric}: ${payload.title || payload.metric}`);

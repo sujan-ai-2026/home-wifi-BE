@@ -1,9 +1,18 @@
 import { DevicesService } from './devices.service';
 import { DevicesQueryDto } from './dto/devices-query.dto';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
+import { RouterService } from '../router/router.service';
 export declare class DevicesController {
     private readonly devicesService;
-    constructor(devicesService: DevicesService);
+    private readonly routerService;
+    constructor(devicesService: DevicesService, routerService: RouterService);
+    getLiveDevices(): Promise<{
+        items: import("../router/adapters/router.adapter.interface").RouterDevice[];
+        meta: {
+            totalConnected: number;
+            updatedAt: string;
+        };
+    }>;
     getDevices(query: DevicesQueryDto): Promise<{
         items: {
             name: string;
@@ -13,10 +22,10 @@ export declare class DevicesController {
             connection: string;
             status: string;
             lastSeen: string;
-            usageGb: number;
-            signal: number | null;
-            gatewayIp: string;
-            gatewayUrl: string;
+            usageGb: null;
+            signal: null;
+            gatewayIp: null;
+            gatewayUrl: null;
             id: string;
             createdAt: Date;
             updatedAt: Date;
@@ -46,42 +55,33 @@ export declare class DevicesController {
         status: string;
         lastSeen: string;
         firstSeen: string;
-        usageGb: number;
-        signal: number | null;
-        gatewayIp: string;
-        gatewayUrl: string;
+        usageGb: null;
+        signal: null;
+        gatewayIp: string | null;
+        gatewayUrl: string | null;
         gateway: {
-            ip: string;
-            url: string;
-            name: string;
-            mac: string;
-            model: string;
-            adminPortalUrl: string;
+            ip: string | null;
+            url: string | null;
+            name: string | null;
+            mac: string | null;
+            model: null;
+            adminPortalUrl: string | null;
             status: string;
             linkType: string;
-            subnetMask: string;
-            dns: string[];
+            subnetMask: null;
+            dns: never[];
         };
         sessions: {
             startTime: string;
             endTime: string | null;
             durationMs: number | null;
-            usageMb: number;
+            usageMb: null;
             source: string;
             gatewayIp?: string;
             gatewayUrl?: string;
             accessPoint?: string;
         }[];
-        consumedApis: {
-            url: string;
-            domain: string;
-            protocol: "HTTPS" | "HTTP" | "WSS" | "DNS";
-            category: string;
-            requestCount: number;
-            dataTransferredMb: number;
-            status: "active" | "idle" | "resolved";
-            lastAccessed: string;
-        }[];
+        consumedApis: never[];
         totalConnectedMs: number;
         observationCount: number;
         id: string;

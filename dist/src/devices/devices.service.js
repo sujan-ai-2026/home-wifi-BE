@@ -23,6 +23,27 @@ const schema_1 = require("../database/schema");
 const realtime_service_1 = require("../realtime/realtime.service");
 const push_service_1 = require("../push/push.service");
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
+const syntheticDeviceSources = ['airtel_gateway'];
+const DEVICE_OFFLINE_GRACE_MS = 30 * 1000;
+function deviceIdentityExpression() {
+    return (0, drizzle_orm_1.sql) `COALESCE(${schema_1.devices.macAddress}, ${schema_1.devices.ipAddress}, ${schema_1.devices.id})`;
+}
+function isLocallyAdministeredMac(mac) {
+    const firstOctet = Number.parseInt(mac?.split(':')[0] ?? '', 16);
+    return Number.isFinite(firstOctet) && (firstOctet & 0x02) !== 0;
+}
+function isUsefulDeviceName(name) {
+    const normalized = name?.trim();
+    return Boolean(normalized &&
+        normalized !== '?' &&
+        !/^unknown(?:[_\s-]|$)/i.test(normalized) &&
+        !/^device\s+\(\d{1,3}(?:\.\d{1,3}){3}\)$/i.test(normalized));
+}
+function isSyntheticDeviceSource(source) {
+    const normalizedSource = source?.toLowerCase();
+    return (normalizedSource?.startsWith('mock') === true ||
+        syntheticDeviceSources.includes(normalizedSource ?? ''));
+}
 let DevicesService = DevicesService_1 = class DevicesService {
     constructor(db, realtimeService, pushService) {
         this.db = db;
@@ -40,7 +61,10 @@ let DevicesService = DevicesService_1 = class DevicesService {
         return clean.match(/.{1,2}/g)?.join(':') || mac;
     }
     async listDevices(query) {
-        const conditions = [];
+        const conditions = [
+            (0, drizzle_orm_1.notLike)(schema_1.devices.source, 'mock%'),
+            (0, drizzle_orm_1.notInArray)(schema_1.devices.source, syntheticDeviceSources),
+        ];
         if (query.search) {
             const term = `%${query.search.trim()}%`;
             conditions.push((0, drizzle_orm_1.or)((0, drizzle_orm_1.ilike)(schema_1.devices.hostname, term), (0, drizzle_orm_1.ilike)(schema_1.devices.ipAddress, term)));
@@ -61,45 +85,35 @@ let DevicesService = DevicesService_1 = class DevicesService {
             conditions.push((0, drizzle_orm_1.sql) `${schema_1.devices.lastSeenAt} <= ${query.toDate}`);
         }
         const whereClause = conditions.length > 0 ? (0, drizzle_orm_1.and)(...conditions) : undefined;
+        const identity = deviceIdentityExpression();
         const [totalResult] = await this.db
-            .select({ count: (0, drizzle_orm_1.count)() })
+            .select({ count: (0, drizzle_orm_1.countDistinct)(identity) })
             .from(schema_1.devices)
             .where(whereClause);
         const total = Number(totalResult?.count || 0);
-        const items = await this.db
-            .select()
+        const distinctItems = await this.db
+            .selectDistinctOn([identity])
             .from(schema_1.devices)
             .where(whereClause)
-            .orderBy((0, drizzle_orm_1.desc)(schema_1.devices.isOnline), (0, drizzle_orm_1.desc)(schema_1.devices.lastSeenAt))
-            .limit(query.limit)
-            .offset(query.offset);
-        const ratePerMinMb = {
-            laptop: 24.5,
-            tv: 48.0,
-            mobile: 12.8,
-            desktop: 32.0,
-            router: 65.0,
-            camera: 8.5,
-            speaker: 6.2,
-            iot: 3.1,
-        };
+            .orderBy(identity, (0, drizzle_orm_1.desc)(schema_1.devices.isOnline), (0, drizzle_orm_1.desc)(schema_1.devices.lastSeenAt));
+        const items = distinctItems
+            .sort((a, b) => Number(b.isOnline) - Number(a.isOnline) ||
+            b.lastSeenAt.getTime() - a.lastSeenAt.getTime())
+            .slice(query.offset, query.offset + query.limit);
         const mappedItems = items.map((d) => {
-            const rate = ratePerMinMb[d.deviceType?.toLowerCase() || ''] || 15.0;
-            const hoursActive = Math.max(0.5, (d.lastSeenAt.getTime() - d.firstSeenAt.getTime()) / 3600000);
-            const usageGb = Math.round(hoursActive * rate * 0.06 * 10) / 10;
             return {
                 ...d,
                 name: d.hostname || 'Unknown Device',
                 type: d.deviceType || 'Generic Device',
                 ip: d.ipAddress || '—',
                 mac: d.macAddress || '—',
-                connection: d.connectionType === 'wifi' ? 'Wi-Fi 6' : d.connectionType === 'ethernet' ? 'Ethernet' : 'Wi-Fi',
+                connection: d.connectionType,
                 status: d.isOnline ? 'online' : 'offline',
                 lastSeen: d.lastSeenAt.toISOString(),
-                usageGb: usageGb > 0 ? usageGb : 0.8,
-                signal: d.connectionType === 'wifi' ? (d.isOnline ? 88 : null) : null,
-                gatewayIp: '192.168.1.1',
-                gatewayUrl: 'http://192.168.1.1',
+                usageGb: null,
+                signal: null,
+                gatewayIp: null,
+                gatewayUrl: null,
             };
         });
         return {
@@ -121,45 +135,38 @@ let DevicesService = DevicesService_1 = class DevicesService {
         if (!device) {
             throw new common_1.NotFoundException(`Device with ID ${id} not found`);
         }
+        if (isSyntheticDeviceSource(device.source)) {
+            throw new common_1.NotFoundException(`Device with ID ${id} not found`);
+        }
         const observations = await this.db
             .select()
             .from(schema_1.deviceObservations)
             .where((0, drizzle_orm_1.eq)(schema_1.deviceObservations.deviceId, id))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.deviceObservations.observedAt))
             .limit(500);
-        const ratePerMinMb = {
-            laptop: 24.5,
-            tv: 48.0,
-            mobile: 12.8,
-            desktop: 32.0,
-            router: 65.0,
-            camera: 8.5,
-            speaker: 6.2,
-            iot: 3.1,
-        };
-        const rate = ratePerMinMb[device.deviceType?.toLowerCase() || ''] || 15.0;
-        const [gatewayDevice] = await this.db
+        const gatewayDevice = await this.db
             .select()
             .from(schema_1.devices)
-            .where((0, drizzle_orm_1.eq)(schema_1.devices.deviceType, 'router'))
-            .limit(1);
-        const gatewayIp = gatewayDevice?.ipAddress || '192.168.1.1';
-        const gatewayUrl = `http://${gatewayIp}`;
-        const gatewayName = gatewayDevice?.hostname || 'Airtel Wi-Fi 6 Router (AAP4221ZY)';
-        const gatewayMac = gatewayDevice?.macAddress || '44:63:C2:3B:7A:C0';
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.devices.deviceType, 'router'), (0, drizzle_orm_1.notLike)(schema_1.devices.source, 'mock%'), (0, drizzle_orm_1.notInArray)(schema_1.devices.source, syntheticDeviceSources)))
+            .limit(1)
+            .then(([gateway]) => gateway);
+        const gatewayIp = gatewayDevice?.ipAddress ?? null;
+        const gatewayUrl = gatewayIp ? `http://${gatewayIp}` : null;
+        const gatewayName = gatewayDevice?.hostname ?? null;
+        const gatewayMac = gatewayDevice?.macAddress ?? null;
         const gateway = {
             ip: gatewayIp,
             url: gatewayUrl,
             name: gatewayName,
             mac: gatewayMac,
-            model: 'Airtel Dual Band Wi-Fi 6 AP (AAP4221ZY)',
+            model: null,
             adminPortalUrl: gatewayUrl,
-            status: gatewayDevice?.isOnline ? 'online' : 'online',
-            linkType: device.connectionType === 'ethernet' ? 'Ethernet Direct Gateway Link' : '802.11ax (Wi-Fi 6 Gateway Link)',
-            subnetMask: '255.255.255.0',
-            dns: [gatewayIp, '8.8.8.8'],
+            status: gatewayDevice ? (gatewayDevice.isOnline ? 'online' : 'offline') : 'unknown',
+            linkType: device.connectionType,
+            subnetMask: null,
+            dns: [],
         };
-        const sessions = this.buildConnectionSessions(observations, rate, device, {
+        const sessions = this.buildConnectionSessions(observations, device, {
             gatewayIp,
             gatewayUrl,
             gatewayName,
@@ -170,33 +177,31 @@ let DevicesService = DevicesService_1 = class DevicesService {
                 totalConnectedMs += session.durationMs;
             }
         }
-        const totalUsageGb = Math.max(0.1, Math.round(((totalConnectedMs / 3600000) * (rate * 0.06)) * 10) / 10);
-        const consumedApis = this.getConsumedApisForDevice(device, gateway);
         return {
             ...device,
             name: device.hostname || 'Unknown Device',
             type: device.deviceType || 'Generic Device',
             ip: device.ipAddress || '—',
             mac: device.macAddress || '—',
-            connection: device.connectionType === 'wifi' ? 'Wi-Fi 6' : device.connectionType === 'ethernet' ? 'Ethernet' : 'Wi-Fi',
+            connection: device.connectionType,
             status: device.isOnline ? 'online' : 'offline',
             lastSeen: device.lastSeenAt.toISOString(),
             firstSeen: device.firstSeenAt.toISOString(),
-            usageGb: totalUsageGb,
-            signal: device.connectionType === 'wifi' ? (device.isOnline ? 88 : null) : null,
+            usageGb: null,
+            signal: null,
             gatewayIp,
             gatewayUrl,
             gateway,
             sessions,
-            consumedApis,
+            consumedApis: [],
             totalConnectedMs,
             observationCount: observations.length,
         };
     }
-    buildConnectionSessions(observations, rate, device, gatewayInfo) {
-        const gwIp = gatewayInfo?.gatewayIp || '192.168.1.1';
-        const gwUrl = gatewayInfo?.gatewayUrl || 'http://192.168.1.1';
-        const gwName = gatewayInfo?.gatewayName || 'Airtel Wi-Fi 6 Router (AAP4221ZY)';
+    buildConnectionSessions(observations, device, gatewayInfo) {
+        const gwIp = gatewayInfo?.gatewayIp ?? undefined;
+        const gwUrl = gatewayInfo?.gatewayUrl ?? undefined;
+        const gwName = gatewayInfo?.gatewayName ?? undefined;
         const sorted = [...observations].reverse();
         const sessions = [];
         let currentSessionStart = null;
@@ -208,13 +213,11 @@ let DevicesService = DevicesService_1 = class DevicesService {
             }
             else if (!obs.isOnline && currentSessionStart) {
                 const durationMs = obs.observedAt.getTime() - currentSessionStart.getTime();
-                const durationMinutes = Math.max(0.1, durationMs / 60000);
-                const usageMb = Math.round(durationMinutes * rate * 10) / 10;
                 sessions.push({
                     startTime: currentSessionStart.toISOString(),
                     endTime: obs.observedAt.toISOString(),
                     durationMs,
-                    usageMb,
+                    usageMb: null,
                     source: currentSource || 'airtel_arp',
                     gatewayIp: gwIp,
                     gatewayUrl: gwUrl,
@@ -226,29 +229,12 @@ let DevicesService = DevicesService_1 = class DevicesService {
         if (currentSessionStart || (device.isOnline && sessions.length === 0)) {
             const start = currentSessionStart || device.firstSeenAt || new Date(Date.now() - 3600000);
             const durationMs = Date.now() - new Date(start).getTime();
-            const usageMb = Math.round(Math.max(0.1, durationMs / 60000) * rate * 10) / 10;
             sessions.push({
                 startTime: new Date(start).toISOString(),
                 endTime: null,
                 durationMs,
-                usageMb,
+                usageMb: null,
                 source: currentSource || device.source || 'airtel_arp',
-                gatewayIp: gwIp,
-                gatewayUrl: gwUrl,
-                accessPoint: gwName,
-            });
-        }
-        if (sessions.length === 0) {
-            const start = device.firstSeenAt;
-            const end = device.lastSeenAt;
-            const durationMs = Math.max(60000, new Date(end).getTime() - new Date(start).getTime());
-            const usageMb = Math.round((durationMs / 60000) * rate * 10) / 10;
-            sessions.push({
-                startTime: new Date(start).toISOString(),
-                endTime: new Date(end).toISOString(),
-                durationMs,
-                usageMb,
-                source: device.source || 'airtel_arp',
                 gatewayIp: gwIp,
                 gatewayUrl: gwUrl,
                 accessPoint: gwName,
@@ -290,56 +276,88 @@ let DevicesService = DevicesService_1 = class DevicesService {
         }
     }
     async ingestDiscoveredDevices(discovered) {
+        const liveDevices = discovered.filter((device) => !device.source.toLowerCase().startsWith('mock'));
+        if (discovered.length > 0 && liveDevices.length === 0)
+            return;
         const now = new Date();
         const processedIds = new Set();
-        for (const d of discovered) {
+        const currentSnapshot = [];
+        for (const d of liveDevices) {
             const normalizedMac = this.normalizeMac(d.macAddress);
-            let matchedDevice = null;
-            if (normalizedMac && !normalizedMac.startsWith('UNKNOWN-')) {
-                const [byMac] = await this.db
-                    .select()
-                    .from(schema_1.devices)
-                    .where((0, drizzle_orm_1.eq)(schema_1.devices.macAddress, normalizedMac))
-                    .limit(1);
-                matchedDevice = byMac;
-            }
-            if (!matchedDevice && d.ipAddress) {
+            const findByIp = async () => {
+                if (!d.ipAddress)
+                    return null;
                 const [byIp] = await this.db
                     .select()
                     .from(schema_1.devices)
                     .where((0, drizzle_orm_1.eq)(schema_1.devices.ipAddress, d.ipAddress))
+                    .orderBy((0, drizzle_orm_1.desc)(schema_1.devices.isOnline), (0, drizzle_orm_1.desc)(schema_1.devices.lastSeenAt))
                     .limit(1);
-                matchedDevice = byIp;
+                return byIp;
+            };
+            let matchedDevice = null;
+            if (isLocallyAdministeredMac(normalizedMac)) {
+                matchedDevice = await findByIp();
             }
-            if (!matchedDevice && d.hostname) {
+            if (!matchedDevice && normalizedMac && !normalizedMac.startsWith('UNKNOWN-')) {
+                const [byMac] = await this.db
+                    .select()
+                    .from(schema_1.devices)
+                    .where((0, drizzle_orm_1.eq)(schema_1.devices.macAddress, normalizedMac))
+                    .orderBy((0, drizzle_orm_1.desc)(schema_1.devices.isOnline), (0, drizzle_orm_1.desc)(schema_1.devices.lastSeenAt))
+                    .limit(1);
+                matchedDevice = byMac;
+            }
+            if (!matchedDevice) {
+                matchedDevice = await findByIp();
+            }
+            if (!matchedDevice && d.hostname && isUsefulDeviceName(d.hostname)) {
                 const [byHost] = await this.db
                     .select()
                     .from(schema_1.devices)
                     .where((0, drizzle_orm_1.eq)(schema_1.devices.hostname, d.hostname))
+                    .orderBy((0, drizzle_orm_1.desc)(schema_1.devices.isOnline), (0, drizzle_orm_1.desc)(schema_1.devices.lastSeenAt))
                     .limit(1);
                 matchedDevice = byHost;
             }
+            if (isSyntheticDeviceSource(matchedDevice?.source)) {
+                matchedDevice = null;
+            }
             let deviceId;
-            const effectiveOnline = Boolean(d.isOnline);
+            const recentlyConfirmed = matchedDevice &&
+                now.getTime() - new Date(matchedDevice.lastSeenAt).getTime() <
+                    DEVICE_OFFLINE_GRACE_MS;
+            const effectiveOnline = Boolean(d.isOnline || (matchedDevice?.isOnline && recentlyConfirmed));
+            const hostname = isUsefulDeviceName(d.hostname)
+                ? d.hostname
+                : isUsefulDeviceName(matchedDevice?.hostname)
+                    ? matchedDevice.hostname
+                    : d.hostname;
+            const deviceType = d.deviceType && d.deviceType !== 'unknown'
+                ? d.deviceType
+                : matchedDevice?.deviceType || d.deviceType || 'unknown';
+            let shouldRecordObservation = false;
             if (matchedDevice) {
                 deviceId = matchedDevice.id;
                 processedIds.add(deviceId);
                 const previousOnline = Boolean(matchedDevice.isOnline);
+                shouldRecordObservation = previousOnline !== effectiveOnline;
                 if (!previousOnline && effectiveOnline) {
-                    await this.triggerDeviceAlert('connected', d.hostname || matchedDevice.hostname, d.ipAddress, normalizedMac, deviceId, d.deviceType);
+                    await this.triggerDeviceAlert('connected', hostname, d.ipAddress, normalizedMac, deviceId, deviceType);
                 }
                 else if (previousOnline && !effectiveOnline) {
-                    await this.triggerDeviceAlert('disconnected', d.hostname || matchedDevice.hostname, d.ipAddress, normalizedMac, deviceId, d.deviceType);
+                    await this.triggerDeviceAlert('disconnected', hostname, d.ipAddress, normalizedMac, deviceId, deviceType);
                 }
                 await this.db
                     .update(schema_1.devices)
                     .set({
+                    macAddress: normalizedMac || matchedDevice.macAddress,
                     ipAddress: d.ipAddress || matchedDevice.ipAddress,
-                    hostname: d.hostname || matchedDevice.hostname,
-                    deviceType: d.deviceType || matchedDevice.deviceType,
+                    hostname,
+                    deviceType,
                     connectionType: d.connectionType || matchedDevice.connectionType,
                     isOnline: effectiveOnline,
-                    lastSeenAt: effectiveOnline ? now : matchedDevice.lastSeenAt,
+                    lastSeenAt: d.isOnline ? now : matchedDevice.lastSeenAt,
                     updatedAt: now,
                 })
                     .where((0, drizzle_orm_1.eq)(schema_1.devices.id, deviceId));
@@ -352,9 +370,9 @@ let DevicesService = DevicesService_1 = class DevicesService {
                     .insert(schema_1.devices)
                     .values({
                     macAddress: normalizedMac,
-                    hostname: d.hostname,
+                    hostname,
                     ipAddress: d.ipAddress,
-                    deviceType: d.deviceType || 'unknown',
+                    deviceType,
                     connectionType: d.connectionType || 'unknown',
                     isOnline: effectiveOnline,
                     firstSeenAt: now,
@@ -364,20 +382,50 @@ let DevicesService = DevicesService_1 = class DevicesService {
                     .returning();
                 deviceId = inserted.id;
                 processedIds.add(deviceId);
+                shouldRecordObservation = true;
                 if (effectiveOnline) {
-                    await this.triggerDeviceAlert('connected', d.hostname, d.ipAddress, normalizedMac, deviceId, d.deviceType);
+                    await this.triggerDeviceAlert('connected', hostname, d.ipAddress, normalizedMac, deviceId, deviceType);
                 }
             }
-            await this.db.insert(schema_1.deviceObservations).values({
-                deviceId,
+            currentSnapshot.push({
+                ...d,
+                macAddress: normalizedMac,
+                hostname,
+                deviceType,
                 isOnline: effectiveOnline,
-                source: d.source || 'router_poll',
-                observedAt: now,
             });
+            if (shouldRecordObservation) {
+                await this.db.insert(schema_1.deviceObservations).values({
+                    deviceId,
+                    isOnline: effectiveOnline,
+                    source: d.source || 'router_poll',
+                    observedAt: now,
+                });
+            }
         }
-        const allKnownDevices = await this.db.select().from(schema_1.devices).where((0, drizzle_orm_1.eq)(schema_1.devices.isOnline, true));
+        const allKnownDevices = await this.db
+            .select()
+            .from(schema_1.devices)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.devices.isOnline, true), (0, drizzle_orm_1.notLike)(schema_1.devices.source, 'mock%'), (0, drizzle_orm_1.notInArray)(schema_1.devices.source, syntheticDeviceSources)));
         for (const dev of allKnownDevices) {
             if (!processedIds.has(dev.id)) {
+                const recentlyConfirmed = now.getTime() - new Date(dev.lastSeenAt).getTime() <
+                    DEVICE_OFFLINE_GRACE_MS;
+                if (recentlyConfirmed) {
+                    const connectionType = dev.connectionType === 'wifi' || dev.connectionType === 'ethernet'
+                        ? dev.connectionType
+                        : 'unknown';
+                    currentSnapshot.push({
+                        macAddress: dev.macAddress,
+                        ipAddress: dev.ipAddress,
+                        hostname: dev.hostname,
+                        deviceType: dev.deviceType,
+                        connectionType,
+                        isOnline: true,
+                        source: dev.source,
+                    });
+                    continue;
+                }
                 await this.db
                     .update(schema_1.devices)
                     .set({ isOnline: false, updatedAt: now })
@@ -392,20 +440,17 @@ let DevicesService = DevicesService_1 = class DevicesService {
                 this.logger.log(`Device marked offline: ${dev.hostname} (${dev.ipAddress}) - missing from router list`);
             }
         }
-        const [onlineCount] = await this.db
-            .select({ count: (0, drizzle_orm_1.count)() })
-            .from(schema_1.devices)
-            .where((0, drizzle_orm_1.eq)(schema_1.devices.isOnline, true));
         this.realtimeService.emitDevices({
-            totalConnected: Number(onlineCount?.count || 0),
+            totalConnected: currentSnapshot.filter((device) => device.isOnline).length,
             updatedAt: now.toISOString(),
+            devices: currentSnapshot,
         });
-        this.realtimeService.emitDevicesListUpdated();
+        this.realtimeService.emitDevicesListUpdated(currentSnapshot);
     }
     async triggerDeviceAlert(event, hostname, ipAddress, macAddress, deviceId, deviceType) {
         const isConn = event === 'connected';
         const metric = isConn ? 'device_connected' : 'device_disconnected';
-        const debounceKey = `${ipAddress || macAddress || deviceId || hostname}`;
+        const debounceKey = `${event}:${ipAddress || macAddress || deviceId || hostname}`;
         const lastAlertTime = this.recentAlertTimestamps.get(debounceKey) || 0;
         if (Date.now() - lastAlertTime < 20000) {
             return;
@@ -493,10 +538,11 @@ let DevicesService = DevicesService_1 = class DevicesService {
         };
     }
     async getOnlineDeviceCount() {
+        const identity = deviceIdentityExpression();
         const [result] = await this.db
-            .select({ count: (0, drizzle_orm_1.count)() })
+            .select({ count: (0, drizzle_orm_1.countDistinct)(identity) })
             .from(schema_1.devices)
-            .where((0, drizzle_orm_1.eq)(schema_1.devices.isOnline, true));
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.devices.isOnline, true), (0, drizzle_orm_1.notLike)(schema_1.devices.source, 'mock%'), (0, drizzle_orm_1.notInArray)(schema_1.devices.source, syntheticDeviceSources)));
         return Number(result?.count || 0);
     }
     getConsumedApisForDevice(device, gateway) {

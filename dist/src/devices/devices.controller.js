@@ -19,9 +19,22 @@ const devices_service_1 = require("./devices.service");
 const devices_query_dto_1 = require("./dto/devices-query.dto");
 const pagination_dto_1 = require("../common/dto/pagination.dto");
 const public_decorator_1 = require("../common/decorators/public.decorator");
+const router_service_1 = require("../router/router.service");
 let DevicesController = class DevicesController {
-    constructor(devicesService) {
+    constructor(devicesService, routerService) {
         this.devicesService = devicesService;
+        this.routerService = routerService;
+    }
+    async getLiveDevices() {
+        const devices = (await this.routerService.getConnectedDevices()).filter((device) => !device.source.toLowerCase().startsWith('mock') &&
+            device.source.toLowerCase() !== 'airtel_gateway');
+        return {
+            items: devices,
+            meta: {
+                totalConnected: devices.filter((device) => device.isOnline).length,
+                updatedAt: new Date().toISOString(),
+            },
+        };
     }
     async getDevices(query) {
         return this.devicesService.listDevices(query);
@@ -37,6 +50,15 @@ let DevicesController = class DevicesController {
     }
 };
 exports.DevicesController = DevicesController;
+__decorate([
+    (0, public_decorator_1.Public)(),
+    (0, common_1.Get)('live'),
+    (0, swagger_1.ApiOperation)({ summary: 'Get current devices from the active router adapter' }),
+    (0, swagger_1.ApiResponse)({ status: 200, description: 'Live router-discovered devices' }),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", Promise)
+], DevicesController.prototype, "getLiveDevices", null);
 __decorate([
     (0, public_decorator_1.Public)(),
     (0, common_1.Get)(),
@@ -81,6 +103,7 @@ __decorate([
 exports.DevicesController = DevicesController = __decorate([
     (0, swagger_1.ApiTags)('devices'),
     (0, common_1.Controller)('devices'),
-    __metadata("design:paramtypes", [devices_service_1.DevicesService])
+    __metadata("design:paramtypes", [devices_service_1.DevicesService,
+        router_service_1.RouterService])
 ], DevicesController);
 //# sourceMappingURL=devices.controller.js.map

@@ -10,14 +10,23 @@ COPY . .
 RUN npm run build
 
 # Production image
-FROM node:20-alpine AS runner
+FROM node:20-bookworm-slim AS runner
 
 WORKDIR /usr/src/app
 
 ENV NODE_ENV=production
 
-# Install curl and Ookla speedtest or dependencies if needed
-RUN apk add --no-cache curl ca-certificates dumb-init
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl dumb-init gnupg iproute2 iputils-ping net-tools \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://packagecloud.io/ookla/speedtest-cli/gpgkey \
+      | gpg --dearmor -o /etc/apt/keyrings/ookla-speedtest-cli.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/ookla-speedtest-cli.gpg] https://packagecloud.io/ookla/speedtest-cli/debian bookworm main" \
+      > /etc/apt/sources.list.d/ookla-speedtest-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends speedtest \
+    && speedtest --version \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm ci --only=production && npm cache clean --force

@@ -6,7 +6,6 @@ import {
   SpeedTestProvider,
   SpeedTestResult,
 } from './speed-test-provider.interface';
-import { SimulationSpeedTestProvider } from './simulation-speed-test.provider';
 
 const execFileAsync = promisify(execFile);
 
@@ -15,10 +14,7 @@ export class CliSpeedTestProvider implements SpeedTestProvider {
   readonly name = 'cli';
   private readonly logger = new Logger(CliSpeedTestProvider.name);
 
-  constructor(
-    private readonly configService: ConfigService,
-    private readonly simulationProvider: SimulationSpeedTestProvider,
-  ) {}
+  constructor(private readonly configService: ConfigService) {}
 
   async execute(): Promise<SpeedTestResult> {
     const bin = this.configService.get<string>('app.speedtestBin') || 'speedtest';
@@ -60,14 +56,6 @@ export class CliSpeedTestProvider implements SpeedTestProvider {
         measuredAt: now,
       };
     } catch (err: any) {
-      // If binary is missing, gracefully use simulation fallback in dev/test mode
-      if (err.code === 'ENOENT') {
-        this.logger.warn(
-          `Speedtest binary '${bin}' not found in PATH. Using simulation fallback for telemetry.`,
-        );
-        return this.simulationProvider.execute();
-      }
-
       this.logger.error(`Speedtest CLI execution failed: ${err.message}`);
 
       // Sanitize error message to prevent any leakage
@@ -83,7 +71,10 @@ export class CliSpeedTestProvider implements SpeedTestProvider {
         jitterMs: null,
         serverName: null,
         provider: 'ookla_cli',
-        errorCode: err.code || 'EXEC_FAIL',
+        errorCode:
+          err.code === 'ENOENT'
+            ? 'SPEEDTEST_NOT_INSTALLED'
+            : err.code || 'EXEC_FAIL',
         errorMessage: sanitizedError,
         measuredAt: now,
       };

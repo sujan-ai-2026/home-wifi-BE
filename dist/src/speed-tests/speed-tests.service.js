@@ -39,6 +39,19 @@ let SpeedTestsService = SpeedTestsService_1 = class SpeedTestsService {
         this.isRunning = true;
         try {
             const result = await this.cliProvider.execute();
+            if (result.provider.toLowerCase().startsWith('simulation')) {
+                this.logger.warn('Skipping persistence of simulated speed-test data');
+                return {
+                    ...result,
+                    status: 'failed',
+                    downloadMbps: null,
+                    uploadMbps: null,
+                    latencyMs: null,
+                    jitterMs: null,
+                    errorCode: 'SIMULATION_NOT_PERSISTED',
+                    errorMessage: 'Simulated speed-test data is not stored.',
+                };
+            }
             const [record] = await this.db
                 .insert(schema_1.speedTests)
                 .values({
@@ -78,12 +91,13 @@ let SpeedTestsService = SpeedTestsService_1 = class SpeedTestsService {
         const [latestAttempt] = await this.db
             .select()
             .from(schema_1.speedTests)
+            .where((0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%'))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.speedTests.measuredAt))
             .limit(1);
         const [latestSuccess] = await this.db
             .select()
             .from(schema_1.speedTests)
-            .where((0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'success'))
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.speedTests.status, 'success'), (0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%')))
             .orderBy((0, drizzle_orm_1.desc)(schema_1.speedTests.measuredAt))
             .limit(1);
         const settings = await this.settingsService.getSettings();
@@ -125,7 +139,7 @@ let SpeedTestsService = SpeedTestsService_1 = class SpeedTestsService {
         };
     }
     async getHistory(query) {
-        const conditions = [];
+        const conditions = [(0, drizzle_orm_1.notLike)(schema_1.speedTests.provider, 'simulation%')];
         if (query.status) {
             conditions.push((0, drizzle_orm_1.eq)(schema_1.speedTests.status, query.status));
         }

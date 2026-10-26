@@ -2,7 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as https from 'https';
 import * as http from 'http';
+import * as os from 'os';
 import { execFile } from 'child_process';
+import { readFile } from 'fs/promises';
 import { promisify } from 'util';
 import {
   RouterAdapter,
@@ -13,75 +15,174 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+export function parseLinuxArpTable(
+  contents: string,
+  routerSubnet: string,
+  routerHost: string,
+): Array<{ ip: string; macClean: string; hostPart: string }> {
+  return contents
+    .split('\n')
+    .slice(1)
+    .flatMap((line) => {
+      const [ip, , flags, mac] = line.trim().split(/\s+/);
+      if (
+        !ip ||
+        !flags ||
+        !mac ||
+        (parseInt(flags, 16) & 0x2) === 0 ||
+        !ip.startsWith(`${routerSubnet}.`) ||
+        ip.endsWith('.255') ||
+        ip === routerHost
+      ) {
+        return [];
+      }
+
+      const octets = mac.split(':');
+      if (octets.length !== 6 || octets.some((octet) => !/^[0-9a-f]{1,2}$/i.test(octet))) {
+        return [];
+      }
+
+      return [
+        {
+          ip,
+          macClean: octets
+            .map((octet) => octet.padStart(2, '0').toUpperCase())
+            .join(':'),
+          hostPart: '?',
+        },
+      ];
+    });
+}
+
+export function parseLinuxNeighborStates(
+  contents: string,
+  routerSubnet: string,
+  routerHost: string,
+): Map<string, string> {
+  const states = new Map<string, string>();
+  for (const line of contents.split('\n')) {
+    const match = line.match(
+      /^((?:\d{1,3}\.){3}\d{1,3})\s+.*\s(REACHABLE|STALE|DELAY|PROBE|FAILED|INCOMPLETE|PERMANENT|NOARP)$/i,
+    );
+    if (!match) continue;
+
+    const [, ip, state] = match;
+    if (ip.startsWith(`${routerSubnet}.`) && ip !== routerHost) {
+      states.set(ip, state.toUpperCase());
+    }
+  }
+  return states;
+}
+
+export function getLocalHostDevice(
+  routerSubnet: string,
+  hostName: string,
+  interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>,
+): RouterDevice | null {
+  for (const [interfaceName, addresses] of Object.entries(interfaces)) {
+    const address = addresses?.find(
+      (candidate) =>
+        !candidate.internal &&
+        (candidate.family === 'IPv4' || (candidate.family as any) === 4) &&
+        candidate.address.startsWith(`${routerSubnet}.`),
+    );
+    if (!address) continue;
+
+    return {
+      macAddress:
+        address.mac && address.mac !== '00:00:00:00:00:00'
+          ? address.mac.toUpperCase()
+          : null,
+      ipAddress: address.address,
+      hostname: hostName || interfaceName,
+      deviceType: 'unknown',
+      connectionType: 'unknown',
+      isOnline: true,
+      source: 'local_host',
+    };
+  }
+
+  return null;
+}
+
 @Injectable()
 export class AirtelRouterAdapter implements RouterAdapter {
   readonly name = 'airtel';
   private readonly logger = new Logger(AirtelRouterAdapter.name);
-  private uptimeAnchorSeconds = 432000; // ~5 days base uptime
-  private startTimestamp = Date.now();
   private lastSubnetSweep = 0;
 
   constructor(private readonly configService: ConfigService) {}
 
-  /**
-   * Discovers friendly device names advertised on the Wi-Fi network via mDNS (Bonjour)
-   */
-  private async discoverWifiAdvertisedNames(): Promise<Map<string, { name: string; type: string }>> {
-    const results = new Map<string, { name: string; type: string }>();
+  private async resolveMdnsHostnames(ips: string[]): Promise<Map<string, string>> {
+    const results = new Map<string, string>();
+    if (process.platform !== 'linux') return results;
 
-    try {
-      // Query active services broadcast on the local Wi-Fi router network
-      const services = ['_googlecast._tcp', '_companion-link._tcp', '_androidtvremote2._tcp', '_airplay._tcp'];
-      const cmd =
-        services.map((s) => `dns-sd -B ${s} local. & p=$!; PIDS="$PIDS $p";`).join(' ') +
-        ' sleep 1.0; kill $PIDS 2>/dev/null';
+    await Promise.all(
+      [...new Set(ips)].map(async (ip) => {
+        try {
+          const { stdout } = await execFileAsync(
+            'gdbus',
+            [
+              'call',
+              '--system',
+              '--dest',
+              'org.freedesktop.Avahi',
+              '--object-path',
+              '/',
+              '--method',
+              'org.freedesktop.Avahi.Server.ResolveAddress',
+              'int32 -1',
+              'int32 -1',
+              `'${ip}'`,
+              'uint32 0',
+            ],
+            { timeout: 1500 },
+          );
+          const match = stdout.match(/,\s'((?:[^'\\]|\\.)*)',\s*uint32 \d+\)/);
+          const hostname = match?.[1]
+            .replace(/\\([0-7]{3})/g, (_escape, octal: string) =>
+              String.fromCharCode(parseInt(octal, 8)),
+            )
+            .replace(/\.local\.?$/i, '');
 
-      const { stdout } = await execFileAsync('sh', ['-c', cmd], { timeout: 2500 });
-      const lines = stdout.split('\n');
-
-      for (const line of lines) {
-        const m = line.match(/Add\s+\d+\s+\d+\s+local\.\s+([^\s]+)\s+(.+)/);
-        if (!m) continue;
-
-        const svc = m[1].toLowerCase();
-        let instance = m[2].trim();
-        let type = 'mobile';
-
-        if (svc.includes('googlecast') || svc.includes('androidtv')) {
-          type = 'tv';
-          if (instance.includes('XStream-Smart-Box') || instance.includes('xstream')) {
-            instance = 'Airtel XStream Smart Box';
+          if (
+            hostname &&
+            !hostname.toLowerCase().startsWith('unknown_') &&
+            hostname !== ip
+          ) {
+            results.set(ip, hostname);
           }
-        } else if (svc.includes('companion-link')) {
-          type = instance.toLowerCase().includes('macbook') || instance.toLowerCase().includes('mac') ? 'laptop' : 'mobile';
-        } else if (svc.includes('airplay')) {
-          type = 'tv';
+        } catch {
+          // Keep ARP-provided names when Avahi is unavailable or has no hostname.
         }
-
-        if (type === 'tv') {
-          results.set('tv', { name: instance, type });
-        }
-      }
-    } catch {
-      // Non-critical, fallback to standard Wi-Fi device naming
-    }
+      }),
+    );
 
     return results;
   }
 
+  private async refreshArpCache(candidateIps: string[]): Promise<void> {
+    const batchSize = 32;
+    for (let i = 0; i < candidateIps.length; i += batchSize) {
+      await Promise.allSettled(
+        candidateIps.slice(i, i + batchSize).map((ip) =>
+          execFileAsync('ping', ['-c', '1', '-W', '200', ip], {
+            timeout: 400,
+          }),
+        ),
+      );
+    }
+  }
+
   /**
-   * Dynamically resolves device name and device type based on router Wi-Fi details,
-   * advertised network broadcasts, and Wi-Fi interface characteristics
+   * Uses hostnames advertised on the LAN; randomized MAC addresses do not identify device models.
    */
   private resolveDynamicDeviceDetails(
     ip: string,
     macClean: string,
     exposedHost?: string,
-    wifiNames?: Map<string, { name: string; type: string }>,
+    wifiNames?: Map<string, string>,
   ): { deviceName: string; deviceType: string } {
-    const lastOctet = ip.split('.').pop() || '0';
-    const cleanMacNoSep = macClean.replace(/[^A-F0-9]/g, '');
-
     // 1. If router / ARP table literally exposes a valid hostname (not "?" or "unknown_...")
     if (
       exposedHost &&
@@ -89,10 +190,11 @@ export class AirtelRouterAdapter implements RouterAdapter {
       !exposedHost.toLowerCase().startsWith('unknown_')
     ) {
       const lower = exposedHost.toLowerCase();
-      let deviceType = 'mobile';
-      if (lower.includes('tv') || lower.includes('box') || lower.includes('stream')) deviceType = 'tv';
-      else if (lower.includes('mac') || lower.includes('pc') || lower.includes('laptop')) deviceType = 'laptop';
-      else if (lower.includes('pad') || lower.includes('tab')) deviceType = 'tablet';
+      let deviceType = 'unknown';
+      if (lower.includes('ipad') || lower.includes('tablet') || lower.includes('tab')) deviceType = 'tablet';
+      else if (lower.includes('tv') || lower.includes('box') || lower.includes('stream')) deviceType = 'tv';
+      else if (lower.includes('macbook') || lower.includes('mac ') || lower.endsWith(' mac') || lower.includes('laptop') || lower.includes('notebook')) deviceType = 'laptop';
+      else if (lower.includes('iphone') || lower.includes('android') || lower.includes('phone') || lower.includes('pixel') || lower.includes('galaxy') || lower.includes('oppo') || lower.includes('vivo') || lower.includes('redmi') || lower.includes('xiaomi') || lower.includes('oneplus')) deviceType = 'mobile';
       else if (lower.includes('sensor') || lower.includes('plug') || lower.includes('iot')) deviceType = 'iot';
 
       return {
@@ -101,40 +203,16 @@ export class AirtelRouterAdapter implements RouterAdapter {
       };
     }
 
-    // 2. Check if device has an advertised Wi-Fi identity from mDNS
-    if (wifiNames) {
-      if (ip === '192.168.1.9' && wifiNames.has('tv')) {
-        const tvInfo = wifiNames.get('tv')!;
-        return {
-          deviceName: `${tvInfo.name} (${ip})`,
-          deviceType: tvInfo.type,
-        };
-      }
-      if (wifiNames.has(ip)) {
-        const info = wifiNames.get(ip)!;
-        return {
-          deviceName: `${info.name} (${ip})`,
-          deviceType: info.type,
-        };
-      }
+    // Prefer the hostname Avahi resolves for this specific LAN address.
+    const mdnsHostname = wifiNames?.get(ip);
+    if (mdnsHostname) {
+      return this.resolveDynamicDeviceDetails(ip, macClean, mdnsHostname);
     }
 
-    // 3. Modern private/randomized Wi-Fi MAC (iOS / Android / Windows Wi-Fi Privacy)
-    // Locally Administered Address (LAA) has the second hex digit as 2, 6, A, or E
-    const secondNibble = parseInt(cleanMacNoSep.charAt(1), 16);
-    const isPrivateMac = [2, 6, 10, 14].includes(secondNibble);
-
-    if (isPrivateMac) {
-      return {
-        deviceName: `Smartphone (${ip})`,
-        deviceType: 'mobile',
-      };
-    }
-
-    // 4. Default dynamic fallback for connected client directly from IP
+    // A randomized MAC does not identify whether a device is a phone, tablet, or laptop.
     return {
       deviceName: `Device (${ip})`,
-      deviceType: 'mobile',
+      deviceType: 'unknown',
     };
   }
 
@@ -212,13 +290,12 @@ export class AirtelRouterAdapter implements RouterAdapter {
       const isReachable = probe.statusCode !== undefined && probe.statusCode >= 200 && probe.statusCode < 500;
 
       if (isReachable) {
-        const elapsed = Math.floor((Date.now() - this.startTimestamp) / 1000);
         return {
-          wanConnected: true,
-          routerUptimeSeconds: this.uptimeAnchorSeconds + elapsed,
+          wanConnected: null,
+          routerUptimeSeconds: null,
           status: 'ok',
-          modelInfo: 'Airtel Dual Band Wi-Fi 6 AP (Model: AAP4221ZY, MAC: 44:63:C2:3B:7A:C0)',
-          source: 'airtel_gateway',
+          modelInfo: 'Configured router responded to an HTTP probe',
+          source: 'airtel_probe',
         };
       }
 
@@ -242,65 +319,34 @@ export class AirtelRouterAdapter implements RouterAdapter {
   }
 
   async getConnectedDevices(): Promise<RouterDevice[]> {
-    const discoveredDevices: RouterDevice[] = [
-      {
-        macAddress: '44:63:C2:3B:7A:C0',
-        ipAddress: '192.168.1.1',
-        hostname: 'Airtel Wi-Fi 6 Router (AAP4221ZY)',
-        deviceType: 'router',
-        connectionType: 'ethernet',
-        isOnline: true,
-        source: 'airtel_gateway',
-      },
-    ];
+    const discoveredDevices: RouterDevice[] = [];
 
-    // Detect current host machine (MacBook / PC running the service)
     try {
-      let hostName = 'Host Computer';
-      try {
-        const { stdout: nameOut } = await execFileAsync('scutil', ['--get', 'ComputerName'], { timeout: 1000 });
-        if (nameOut.trim()) hostName = nameOut.trim();
-      } catch {
-        // Fallback to hostname if scutil is unavailable
+      const routerHost = new URL(
+        this.configService.get<string>('app.routerBaseUrl') ||
+          'http://192.168.1.1',
+      ).hostname;
+      const routerSubnet = routerHost.split('.').slice(0, 3).join('.');
+      const localHost = getLocalHostDevice(
+        routerSubnet,
+        os.hostname(),
+        os.networkInterfaces(),
+      );
+      if (localHost) {
+        discoveredDevices.push(localHost);
       }
 
-      discoveredDevices.push({
-        macAddress: 'CA:55:C2:36:01:AD',
-        ipAddress: '192.168.1.6',
-        hostname: hostName,
-        deviceType: 'laptop',
-        connectionType: 'wifi',
-        isOnline: true,
-        source: 'local_host',
-      });
-    } catch (err: any) {
-      this.logger.debug(`Could not resolve local host device: ${err.message}`);
-    }
-
-    try {
-      // Sweep subnet only once every 60 seconds to refresh ARP cache without saturating the local Wi-Fi interface
+      // Refresh ARP before reading it so newly connected clients are visible in this poll.
       const nowTs = Date.now();
       if (nowTs - this.lastSubnetSweep > 60000) {
         this.lastSubnetSweep = nowTs;
-        const candidateIps = [
-          ...Array.from({ length: 30 }, (_, i) => `192.168.1.${i + 2}`),
-          ...Array.from({ length: 20 }, (_, i) => `192.168.1.${i + 100}`),
-        ];
-        Promise.allSettled(
-          candidateIps.map((ip) =>
-            execFileAsync('ping', ['-c', '1', '-W', '200', ip], { timeout: 400 }).catch(() => {}),
-          ),
-        ).catch(() => {});
+        const candidateIps = Array.from({ length: 253 }, (_, i) => i + 2)
+          .filter((lastOctet) => `${routerSubnet}.${lastOctet}` !== routerHost)
+          .map((lastOctet) => `${routerSubnet}.${lastOctet}`);
+        await this.refreshArpCache(candidateIps).catch((err: Error) => {
+          this.logger.warn(`Could not refresh local ARP cache: ${err.message}`);
+        });
       }
-
-      // Discover friendly device names broadcast on the Wi-Fi network via mDNS
-      const wifiNames = await this.discoverWifiAdvertisedNames().catch(
-        () => new Map<string, { name: string; type: string }>(),
-      );
-
-      // Read local ARP table
-      const { stdout } = await execFileAsync('arp', ['-a'], { timeout: 3000 });
-      const lines = stdout.split('\n');
 
       const arpCandidates: Array<{
         ip: string;
@@ -308,51 +354,68 @@ export class AirtelRouterAdapter implements RouterAdapter {
         hostPart: string;
       }> = [];
 
-      for (const line of lines) {
-        // e.g. "? (192.168.1.8) at 6a:88:6:14:1d:8 on en0 ifscope [ethernet]"
-        // e.g. "? (192.168.1.2) at (incomplete) on en0 ifscope [ethernet]"
-        const ipMatch = line.match(/\((192\.168\.\d+\.\d+)\)/);
-        if (!ipMatch) continue;
+      if (process.platform === 'linux') {
+        const [arpContents, neighborOutput] = await Promise.all([
+          readFile('/proc/net/arp', 'utf8'),
+          execFileAsync('ip', ['neigh', 'show'], { timeout: 3000 }).then(
+            ({ stdout }) => stdout,
+            (err: Error) => {
+              this.logger.warn(
+                `Could not read Linux neighbor states: ${err.message}`,
+              );
+              return '';
+            },
+          ),
+        ]);
+        const neighborStates = parseLinuxNeighborStates(
+          neighborOutput,
+          routerSubnet,
+          routerHost,
+        );
+        arpCandidates.push(
+          ...parseLinuxArpTable(arpContents, routerSubnet, routerHost).filter(
+            ({ ip }) =>
+              neighborStates.get(ip) !== 'FAILED' &&
+              neighborStates.get(ip) !== 'INCOMPLETE',
+          ),
+        );
+      } else {
+        const lines = (
+          await execFileAsync('arp', ['-a'], { timeout: 3000 })
+        ).stdout.split('\n');
+        for (const line of lines) {
+          const ipMatch = line.match(/\(((?:\d{1,3}\.){3}\d{1,3})\)/);
+          const macMatch = line.match(/at\s+([0-9a-fA-F:]+)/);
+          if (!ipMatch || !macMatch || line.includes('(incomplete)')) continue;
 
-        const ip = ipMatch[1];
-        if (ip.endsWith('.255') || ip === '192.168.1.1' || ip === '192.168.1.6') {
-          continue; // Gateway & host already handled
+          const ip = ipMatch[1];
+          const octets = macMatch[1].split(':');
+          if (
+            !ip.startsWith(`${routerSubnet}.`) ||
+            ip.endsWith('.255') ||
+            ip === routerHost ||
+            octets.length !== 6
+          ) {
+            continue;
+          }
+
+          arpCandidates.push({
+            ip,
+            macClean: octets
+              .map((octet) => octet.padStart(2, '0').toUpperCase())
+              .join(':'),
+            hostPart: line.split('(')[0]?.trim() || '?',
+          });
         }
-
-        const isIncomplete = line.includes('(incomplete)');
-        const macMatch = line.match(/at\s+([0-9a-fA-F:]+)/);
-        const rawMac = macMatch ? macMatch[1] : null;
-
-        if (isIncomplete || !rawMac || rawMac.toLowerCase().includes('ff:ff:ff')) {
-          continue; // Skip non-existent devices / incomplete ARP cache
-        }
-
-        const macClean = rawMac
-          .split(':')
-          .map((b: string) => b.padStart(2, '0').toUpperCase())
-          .join(':');
-
-        const hostPart = line.split('(')[0]?.trim();
-        arpCandidates.push({ ip, macClean, hostPart });
       }
 
-      // Check reachability of all ARP candidates in parallel
-      // Using -c 2 gives Wi-Fi devices (e.g. phones in radio sleep) a reliable window to respond,
-      // avoiding false disconnection flapping while ensuring truly disconnected devices are marked offline.
-      const livenessResults = await Promise.all(
-        arpCandidates.map(async ({ ip }) => {
-          try {
-            await execFileAsync('ping', ['-c', '2', '-W', '800', '-t', '2', ip], { timeout: 2500 });
-            return { ip, isOnline: true };
-          } catch {
-            return { ip, isOnline: false };
-          }
-        }),
+      const wifiNames = await this.resolveMdnsHostnames(
+        arpCandidates.map(({ ip }) => ip),
       );
-      const livenessMap = new Map(livenessResults.map((r) => [r.ip, r.isOnline]));
 
       for (const { ip, macClean, hostPart } of arpCandidates) {
-        const isOnline = livenessMap.get(ip) ?? false;
+        // A complete ARP entry proves the client is present on the LAN; many clients block ICMP.
+        const isOnline = true;
         // Dynamically determine device name and type based on router Wi-Fi and network details
         const { deviceName, deviceType } = this.resolveDynamicDeviceDetails(ip, macClean, hostPart, wifiNames);
 
@@ -361,7 +424,7 @@ export class AirtelRouterAdapter implements RouterAdapter {
           ipAddress: ip,
           hostname: deviceName,
           deviceType,
-          connectionType: 'wifi',
+          connectionType: 'unknown',
           isOnline,
           source: 'airtel_arp',
         });
@@ -374,14 +437,6 @@ export class AirtelRouterAdapter implements RouterAdapter {
   }
 
   async getInterfaceCounters(): Promise<InterfaceCountersResult | null> {
-    const elapsed = Math.floor((Date.now() - this.startTimestamp) / 1000);
-    // Reliable counter estimation based on verified gateway presence
-    const received = 114800000000 + elapsed * 180000;
-    const transmitted = 29280000000 + elapsed * 50000;
-    return {
-      receivedBytes: received,
-      transmittedBytes: transmitted,
-      source: 'airtel_counters',
-    };
+    return null;
   }
 }

@@ -1,111 +1,59 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: homenet-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homenet
+      POSTGRES_USER: homenet_user
+      POSTGRES_PASSWORD: homenet_secure_db_pass
+    volumes:
+      - homenet_pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    networks:
+      - homenet-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homenet_user -d homenet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-postgres:
-
-image: postgres:16-alpine
-
-container\_name: homenet-postgres
-
-restart: unless-stopped
-
-environment:
-
-POSTGRES\_DB: homenet
-
-POSTGRES\_USER: homenet\_user
-
-POSTGRES\_PASSWORD: homenet\_secure\_db\_pass
-
-volumes:
-
-\- homenet\_pgdata:/var/lib/postgresql/data
-
-ports:
-
-\# Expose only to 127.0.0.1 for local host inspection if necessary
-
-\- "127.0.0.1:5433:5432"
-
-networks:
-
-\- homenet-internal
-
-healthcheck:
-
-test: \["CMD-SHELL", "pg\_isready -U homenet\_user -d homenet"\]
-
-interval: 5s
-
-timeout: 5s
-
-retries: 5
-
-api:
-
-build:
-
-context: .
-
-dockerfile: Dockerfile
-
-container\_name: homenet-api
-
-restart: unless-stopped
-
-environment:
-
-NODE\_ENV: production
-
-PORT: 3001
-
-API\_PREFIX: api/v1
-
-DATABASE\_URL: ${DATABASE\_URL:?Set DATABASE\_URL in .env}
-
-FRONTEND\_ORIGIN: ${FRONTEND\_ORIGIN:-https://rad-cucurucho-a9ef22.netlify.app}
-
-JWT\_SECRET: replace\_with\_long\_random\_secret\_in\_production\_32chars
-
-SPEEDTEST\_BIN: speedtest
-
-SPEED\_THRESHOLD\_MBPS: 10
-
-UPLOAD\_THRESHOLD\_MBPS: 10
-
-SPEED\_TEST\_INTERVAL\_MINUTES: 15
-
-ROUTER\_POLL\_INTERVAL\_SECONDS: 60
-
-ROUTER\_ADAPTER: ${ROUTER\_ADAPTER:-unsupported}
-
-ROUTER\_BASE\_URL: http://192.168.1.1
-
-ROUTER\_USERNAME: admin
-
-ROUTER\_PASSWORD: admin
-
-ports:
-
-\- "3001:3001"
-
-extra\_hosts:
-
-\- "host.docker.internal:host-gateway"
-
-networks:
-
-\- homenet-internal
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homenet-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      API_PREFIX: api/v1
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://homenet_user:homenet_secure_db_pass@postgres:5432/homenet}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-https://rad-cucurucho-a9ef22.netlify.app}
+      JWT_SECRET: replace_with_long_random_secret_in_production_32chars
+      SPEEDTEST_BIN: speedtest
+      SPEED_THRESHOLD_MBPS: 10
+      UPLOAD_THRESHOLD_MBPS: 10
+      SPEED_TEST_INTERVAL_MINUTES: 15
+      ROUTER_POLL_INTERVAL_SECONDS: 60
+      ROUTER_ADAPTER: ${ROUTER_ADAPTER:-airtel}
+      ROUTER_BASE_URL: ${ROUTER_BASE_URL:-https://192.168.1.1}
+      ROUTER_USERNAME: admin
+      ROUTER_PASSWORD: admin
+    ports:
+      - "3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - homenet-internal
 
 volumes:
-
-homenet\_pgdata:
-
-driver: local
+  homenet_pgdata:
+    driver: local
 
 networks:
-
-homenet-internal:
-
-driver: bridge
+  homenet-internal:
+    driver: bridge

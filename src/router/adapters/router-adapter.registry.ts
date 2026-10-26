@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { RouterAdapter } from './router.adapter.interface';
 import { MockRouterAdapter } from './mock.adapter';
 import { AirtelRouterAdapter } from './airtel.adapter';
+import { UnsupportedRouterAdapter } from './unsupported.adapter';
 
 @Injectable()
 export class RouterAdapterRegistry {
@@ -13,9 +14,11 @@ export class RouterAdapterRegistry {
     private readonly configService: ConfigService,
     private readonly mockAdapter: MockRouterAdapter,
     private readonly airtelAdapter: AirtelRouterAdapter,
+    private readonly unsupportedAdapter: UnsupportedRouterAdapter,
   ) {
     this.register(this.mockAdapter);
     this.register(this.airtelAdapter);
+    this.register(this.unsupportedAdapter);
   }
 
   register(adapter: RouterAdapter) {
@@ -29,10 +32,10 @@ export class RouterAdapterRegistry {
 
     const adapter = this.adapters.get(configuredName);
     if (!adapter) {
-      this.logger.warn(
-        `Configured router adapter '${configuredName}' not found. Falling back to 'mock'.`,
+      this.logger.error(
+        `Configured router adapter '${configuredName}' not found. No router telemetry will be collected.`,
       );
-      return this.mockAdapter;
+      return this.unsupportedAdapter;
     }
 
     return adapter;

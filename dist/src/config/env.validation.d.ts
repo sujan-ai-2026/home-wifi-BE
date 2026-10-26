@@ -32,7 +32,7 @@ export declare const envSchema: z.ZodObject<{
     UPLOAD_THRESHOLD_MBPS: number;
     SPEED_TEST_INTERVAL_MINUTES: number;
     ROUTER_POLL_INTERVAL_SECONDS: number;
-    ROUTER_ADAPTER: "mock" | "airtel" | "unsupported";
+    ROUTER_ADAPTER: "unsupported" | "mock" | "airtel";
     ROUTER_BASE_URL: string;
     ROUTER_USERNAME: string;
     ROUTER_PASSWORD: string;
@@ -53,7 +53,7 @@ export declare const envSchema: z.ZodObject<{
     UPLOAD_THRESHOLD_MBPS?: number | undefined;
     SPEED_TEST_INTERVAL_MINUTES?: number | undefined;
     ROUTER_POLL_INTERVAL_SECONDS?: number | undefined;
-    ROUTER_ADAPTER?: "mock" | "airtel" | "unsupported" | undefined;
+    ROUTER_ADAPTER?: "unsupported" | "mock" | "airtel" | undefined;
     ROUTER_BASE_URL?: string | undefined;
     ROUTER_USERNAME?: string | undefined;
     ROUTER_PASSWORD?: string | undefined;

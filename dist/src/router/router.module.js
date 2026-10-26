@@ -10,6 +10,7 @@ exports.RouterModule = void 0;
 const common_1 = require("@nestjs/common");
 const mock_adapter_1 = require("./adapters/mock.adapter");
 const airtel_adapter_1 = require("./adapters/airtel.adapter");
+const unsupported_adapter_1 = require("./adapters/unsupported.adapter");
 const router_adapter_registry_1 = require("./adapters/router-adapter.registry");
 const router_service_1 = require("./router.service");
 let RouterModule = class RouterModule {
@@ -21,6 +22,7 @@ exports.RouterModule = RouterModule = __decorate([
         providers: [
             mock_adapter_1.MockRouterAdapter,
             airtel_adapter_1.AirtelRouterAdapter,
+            unsupported_adapter_1.UnsupportedRouterAdapter,
             router_adapter_registry_1.RouterAdapterRegistry,
             router_service_1.RouterService,
         ],

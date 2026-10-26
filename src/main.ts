@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { AppModule } from './app.module';
+import { getAllowedOrigins, isCorsOriginAllowed } from './config/cors';
 
 async function bootstrap() {
   const logger = new Logger('HomeNetBootstrap');
@@ -23,41 +24,11 @@ async function bootstrap() {
 
   // Helmet security headers
   // CORS configuration - mounted first so all requests and preflights receive CORS headers
-  const allowedOrigins = [
-    frontendOrigin,
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:5173',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:3002',
-    'http://127.0.0.1:5173',
-    'https://rad-cucurucho-a9ef22.netlify.app',
-  ];
+  const allowedOrigins = getAllowedOrigins(frontendOrigin);
 
   app.enableCors({
     origin: (origin, callback) => {
-      const normalizedOrigin = origin?.replace(/\/+$/, '');
-      if (
-        !origin ||
-        nodeEnv !== 'production' ||
-        allowedOrigins.includes(origin) ||
-        (normalizedOrigin && allowedOrigins.includes(normalizedOrigin)) ||
-        origin.startsWith('http://localhost:') ||
-        origin.startsWith('http://127.0.0.1:') ||
-        origin.endsWith('.ngrok-free.app') ||
-        origin.endsWith('.ngrok.app') ||
-        origin.endsWith('.ngrok.io') ||
-        origin.endsWith('.ngrok-free.dev') ||
-        origin.endsWith('.netlify.app') ||
-        (normalizedOrigin && normalizedOrigin.endsWith('.netlify.app')) ||
-        /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/.test(origin)
-      ) {
-        callback(null, true);
-      } else {
-        callback(null, false);
-      }
+      callback(null, isCorsOriginAllowed(origin, allowedOrigins, nodeEnv));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

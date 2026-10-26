@@ -1,0 +1,15 @@
+[Unit]
+Description=HomeNet API host LAN collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/luna/Desktop/home-wifi-BE
+EnvironmentFile=/home/luna/Desktop/home-wifi-BE/.env
+ExecStart=/usr/bin/env DATABASE_URL=postgresql://homenet_user:homenet_secure_db_pass@127.0.0.1:5433/homenet NODE_ENV=production PORT=3001 ROUTER_ADAPTER=airtel ROUTER_BASE_URL=https://192.168.1.1 /home/luna/.nvm/versions/node/v20.5.1/bin/node /home/luna/Desktop/home-wifi-BE/dist/src/main.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,29 @@
+services:
+  api:
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    extra_hosts: !reset []
+    environment:
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgresql://homenet_user:homenet_secure_db_pass@127.0.0.1:5433/homenet}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-tunnel-proxy:
+    image: node:20-alpine
+    container_name: homenet-api-tunnel-proxy
+    restart: unless-stopped
+    command:
+      - node
+      - -e
+      - "require('node:net').createServer((client) => client.pipe(require('node:net').connect(3001, 'host.docker.internal'))).listen(3001, '0.0.0.0')"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      api:
+        condition: service_started
+    networks:
+      homenet-internal:
+        aliases:
+          - api

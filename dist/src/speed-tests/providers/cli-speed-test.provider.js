@@ -15,12 +15,10 @@ const common_1 = require("@nestjs/common");
 const config_1 = require("@nestjs/config");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
-const simulation_speed_test_provider_1 = require("./simulation-speed-test.provider");
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 let CliSpeedTestProvider = CliSpeedTestProvider_1 = class CliSpeedTestProvider {
-    constructor(configService, simulationProvider) {
+    constructor(configService) {
         this.configService = configService;
-        this.simulationProvider = simulationProvider;
         this.name = 'cli';
         this.logger = new common_1.Logger(CliSpeedTestProvider_1.name);
     }
@@ -55,10 +53,6 @@ let CliSpeedTestProvider = CliSpeedTestProvider_1 = class CliSpeedTestProvider {
             };
         }
         catch (err) {
-            if (err.code === 'ENOENT') {
-                this.logger.warn(`Speedtest binary '${bin}' not found in PATH. Using simulation fallback for telemetry.`);
-                return this.simulationProvider.execute();
-            }
             this.logger.error(`Speedtest CLI execution failed: ${err.message}`);
             const sanitizedError = (err.stderr || err.message || 'CLI execution error')
                 .replace(/[\r\n]+/g, ' ')
@@ -71,7 +65,9 @@ let CliSpeedTestProvider = CliSpeedTestProvider_1 = class CliSpeedTestProvider {
                 jitterMs: null,
                 serverName: null,
                 provider: 'ookla_cli',
-                errorCode: err.code || 'EXEC_FAIL',
+                errorCode: err.code === 'ENOENT'
+                    ? 'SPEEDTEST_NOT_INSTALLED'
+                    : err.code || 'EXEC_FAIL',
                 errorMessage: sanitizedError,
                 measuredAt: now,
             };
@@ -81,7 +77,6 @@ let CliSpeedTestProvider = CliSpeedTestProvider_1 = class CliSpeedTestProvider {
 exports.CliSpeedTestProvider = CliSpeedTestProvider;
 exports.CliSpeedTestProvider = CliSpeedTestProvider = CliSpeedTestProvider_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [config_1.ConfigService,
-        simulation_speed_test_provider_1.SimulationSpeedTestProvider])
+    __metadata("design:paramtypes", [config_1.ConfigService])
 ], CliSpeedTestProvider);
 //# sourceMappingURL=cli-speed-test.provider.js.map

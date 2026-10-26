@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
-import { and, gte, lt, eq, sql } from 'drizzle-orm';
+import { and, gte, lt, eq, sql, notLike, notInArray } from 'drizzle-orm';
 import { DRIZZLE_ORM, DrizzleDb } from '../database/database.provider';
 import { speedTests, alertEvents, routerSnapshots, dailyMetrics } from '../database/schema';
 import { SettingsService } from '../settings/settings.service';
@@ -41,6 +41,7 @@ export class ReportsService {
           gte(speedTests.measuredAt, start),
           lt(speedTests.measuredAt, end),
           eq(speedTests.status, 'success'),
+          notLike(speedTests.provider, 'simulation%'),
         ),
       );
 
@@ -53,6 +54,7 @@ export class ReportsService {
           gte(speedTests.measuredAt, start),
           lt(speedTests.measuredAt, end),
           eq(speedTests.status, 'failed'),
+          notLike(speedTests.provider, 'simulation%'),
         ),
       );
 
@@ -112,6 +114,8 @@ export class ReportsService {
         and(
           gte(routerSnapshots.observedAt, start),
           lt(routerSnapshots.observedAt, end),
+          notLike(routerSnapshots.source, 'mock%'),
+          notInArray(routerSnapshots.source, ['airtel_gateway', 'airtel_counters']),
         ),
       );
 
@@ -207,6 +211,7 @@ export class ReportsService {
           gte(speedTests.measuredAt, start),
           lt(speedTests.measuredAt, end),
           eq(speedTests.status, 'success'),
+          notLike(speedTests.provider, 'simulation%'),
         ),
       );
 
@@ -265,6 +270,7 @@ export class ReportsService {
         and(
           gte(speedTests.measuredAt, start),
           lt(speedTests.measuredAt, end),
+          notLike(speedTests.provider, 'simulation%'),
         ),
       );
 

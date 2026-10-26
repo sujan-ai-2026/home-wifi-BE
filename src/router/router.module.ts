@@ -1,6 +1,7 @@
 import { Module, Global } from '@nestjs/common';
 import { MockRouterAdapter } from './adapters/mock.adapter';
 import { AirtelRouterAdapter } from './adapters/airtel.adapter';
+import { UnsupportedRouterAdapter } from './adapters/unsupported.adapter';
 import { RouterAdapterRegistry } from './adapters/router-adapter.registry';
 import { RouterService } from './router.service';
 
@@ -9,6 +10,7 @@ import { RouterService } from './router.service';
   providers: [
     MockRouterAdapter,
     AirtelRouterAdapter,
+    UnsupportedRouterAdapter,
     RouterAdapterRegistry,
     RouterService,
   ],

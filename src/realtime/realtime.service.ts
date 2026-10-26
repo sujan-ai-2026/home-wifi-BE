@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { RealtimeGateway } from './realtime.gateway';
+import { RouterDevice } from '../router/adapters/router.adapter.interface';
 
 export interface SpeedTestUpdatedPayload {
   id: string;
@@ -23,6 +24,7 @@ export interface InternetHealthUpdatedPayload {
 export interface DevicesUpdatedPayload {
   totalConnected: number;
   updatedAt: string;
+  devices?: RouterDevice[];
 }
 
 export interface AlertEventPayload {
@@ -70,9 +72,12 @@ export class RealtimeService {
     this.gateway.broadcast('devices.updated', payload);
   }
 
-  emitDevicesListUpdated() {
+  emitDevicesListUpdated(devices?: RouterDevice[]) {
     this.logger.debug(`Emitting devices.list.updated`);
-    this.gateway.broadcast('devices.list.updated', { updatedAt: new Date().toISOString() });
+    this.gateway.broadcast('devices.list.updated', {
+      updatedAt: new Date().toISOString(),
+      ...(devices ? { devices } : {}),
+    });
   }
 
   emitAlertCreated(payload: AlertEventPayload) {

@@ -14,6 +14,7 @@ exports.RealtimeGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const common_1 = require("@nestjs/common");
 const socket_io_1 = require("socket.io");
+const cors_1 = require("../config/cors");
 let RealtimeGateway = RealtimeGateway_1 = class RealtimeGateway {
     constructor() {
         this.logger = new common_1.Logger(RealtimeGateway_1.name);
@@ -48,7 +49,9 @@ exports.RealtimeGateway = RealtimeGateway = RealtimeGateway_1 = __decorate([
     (0, websockets_1.WebSocketGateway)({
         cors: {
             origin: (origin, callback) => {
-                callback(null, true);
+                const allowedOrigins = (0, cors_1.getAllowedOrigins)(process.env.FRONTEND_ORIGIN);
+                const nodeEnv = process.env.NODE_ENV || 'development';
+                callback(null, (0, cors_1.isCorsOriginAllowed)(origin, allowedOrigins, nodeEnv));
             },
             credentials: true,
         },
